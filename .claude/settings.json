@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__claude_ai_Claude_Docs__batch",
+      "WebFetch(domain:squash.ai)",
+      "ClaudeInChromeDomain(www.atera.com)",
+      "mcp__claude-in-chrome__tabs_context_mcp",
+      "WebFetch(domain:www.squash.ai)",
+      "WebSearch",
+      "ClaudeInChromeDomain(www.microsoft.com)",
+      "ClaudeInChromeDomain(signup.microsoft.com)",
+      "Bash(grep -E '^\\\\.\\(env|gitignore\\)$')",
+      "Bash(chmod 600 .env)",
+      "Bash(env)",
+      "Bash(uv pip *)",
+      "Bash(uvx logfire *)"
+    ]
+  }
+}
