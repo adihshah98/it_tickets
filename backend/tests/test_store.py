@@ -3,7 +3,7 @@ from contextlib import aclosing
 
 import pytest
 
-from tech.store import RunState, Store
+from tech.core.store import RunState, Store
 
 
 @pytest.fixture

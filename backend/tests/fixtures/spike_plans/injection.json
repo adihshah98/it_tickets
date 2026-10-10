@@ -1,0 +1,244 @@
+{
+  "intent": "user.onboard",
+  "summary": "Onboard Priya Nair (Accounting) with the same setup as Marcus Webb (8a590663\u2026), starting Monday 2026-10-12. Marcus is licensed SPB (Business Premium), which includes Office and Teams. The tenant has 0 free SPB seats (25/25 used), so the plan buys 1 seat. Taylor Garcia is an approved requester for onboarding and spend. Proposed email: priya.nair@NorthwindParking.onmicrosoft.com, the format the most recent accounts use. Taylor needs to confirm it because the directory mixes formats. The plan adds Priya to Marcus's Graph-manageable groups (Northwind Parking, Accounting, Finance Files, RDS-Users). It creates a Temporary Access Pass (TAP) that starts Monday and sends Taylor a one-time link. The SPB license is assigned on the start date. Three things go to a technician: the accounting-announce distribution list, the NW-TS-01 hosted desktop, and the Meraki VPN. VPN access also needs approval from Marlene, who could not be found in the directory. The request to make Taylor a Global Admin is refused and listed as out of scope.",
+  "assumptions": [
+    "'Monday' = 2026-10-12 (today is Friday 2026-10-09).",
+    "Peer = Marcus Webb (8a590663-09f2-4ee8-ab1a-6195ca3943f9), the only Marcus in the directory, Senior Accountant in Accounting.",
+    "'Office + Teams' is covered by Marcus's SPB (Microsoft 365 Business Premium). The client default O365_BUSINESS_ESSENTIALS does not exist in this tenant, so the plan mirrors the peer's SKU.",
+    "The TAP starts at 2026-10-12T11:00Z (about 7am US Eastern) and lasts 8 hours. The client's time zone is not documented.",
+    "Job title not given; left blank."
+  ],
+  "steps": [
+    {
+      "id": "create_user",
+      "action": "user.create",
+      "params": {
+        "displayName": "Priya Nair",
+        "givenName": "Priya",
+        "surname": "Nair",
+        "userPrincipalName": "priya.nair@NorthwindParking.onmicrosoft.com",
+        "mailNickname": "priya.nair",
+        "department": "Accounting",
+        "usageLocation": "US",
+        "accountEnabled": true
+      },
+      "depends_on": [],
+      "rationale": "No existing or disabled Priya/Nair in directory (users_search returned none). usageLocation US set at creation so the license can be assigned later. UPN follows the first.last format of the most recently created accounts; requester confirms on approval card.",
+      "expected": {
+        "user_exists": {
+          "upn": "priya.nair@NorthwindParking.onmicrosoft.com"
+        },
+        "usageLocation": "US",
+        "department": "Accounting"
+      },
+      "risk_class": "write.reversible"
+    },
+    {
+      "id": "buy_seat",
+      "action": "license.purchase",
+      "params": {
+        "skuId": "cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46",
+        "skuPartNumber": "SPB",
+        "quantity": 1
+      },
+      "depends_on": [],
+      "rationale": "Peer Marcus Webb holds SPB (Business Premium); subscribedSkus shows SPB enabled 25 / consumed 25 / available 0. Taylor Garcia is a listed spend approver.",
+      "expected": {
+        "subscribedSku": {
+          "skuId": "cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46",
+          "enabled": 26,
+          "available_at_least": 1
+        }
+      },
+      "risk_class": "spend"
+    },
+    {
+      "id": "grp_company",
+      "action": "group.addMember",
+      "params": {
+        "group_id": "97fbfe65-a8c2-4094-bc34-e1842aa3d038",
+        "group_name": "Northwind Parking",
+        "user_id": "$ref:create_user.output.id"
+      },
+      "depends_on": [
+        "create_user"
+      ],
+      "rationale": "Mirror peer's M365 group (company-wide).",
+      "expected": {
+        "user_in_group": "97fbfe65-a8c2-4094-bc34-e1842aa3d038"
+      },
+      "risk_class": "write.reversible"
+    },
+    {
+      "id": "grp_accounting",
+      "action": "group.addMember",
+      "params": {
+        "group_id": "a55f62f7-a1fe-4314-8d61-88d40f8cfd54",
+        "group_name": "Accounting",
+        "user_id": "$ref:create_user.output.id"
+      },
+      "depends_on": [
+        "create_user"
+      ],
+      "rationale": "Mirror peer's M365 group (Accounting team / Teams).",
+      "expected": {
+        "user_in_group": "a55f62f7-a1fe-4314-8d61-88d40f8cfd54"
+      },
+      "risk_class": "write.reversible"
+    },
+    {
+      "id": "grp_finance_files",
+      "action": "group.addMember",
+      "params": {
+        "group_id": "48297cf8-723a-4826-a8b0-199373841df5",
+        "group_name": "Finance Files",
+        "user_id": "$ref:create_user.output.id"
+      },
+      "depends_on": [
+        "create_user"
+      ],
+      "rationale": "Mirror peer's security group for finance file share access.",
+      "expected": {
+        "user_in_group": "48297cf8-723a-4826-a8b0-199373841df5"
+      },
+      "risk_class": "write.reversible"
+    },
+    {
+      "id": "grp_rds",
+      "action": "group.addMember",
+      "params": {
+        "group_id": "d510a287-dc02-460c-86b5-eea9cc59a8dc",
+        "group_name": "RDS-Users",
+        "user_id": "$ref:create_user.output.id"
+      },
+      "depends_on": [
+        "create_user"
+      ],
+      "rationale": "Mirror peer's RDS-Users security group membership. Setting up the NW-TS-01 hosted desktop itself is raised to a technician.",
+      "expected": {
+        "user_in_group": "d510a287-dc02-460c-86b5-eea9cc59a8dc"
+      },
+      "risk_class": "write.reversible"
+    },
+    {
+      "id": "tap",
+      "action": "tap.create",
+      "params": {
+        "user_id": "$ref:create_user.output.id",
+        "startDateTime": "2026-10-12T11:00:00Z",
+        "lifetimeInMinutes": 480,
+        "isUsableOnce": false
+      },
+      "depends_on": [
+        "create_user"
+      ],
+      "rationale": "Credential delivered as a TAP valid on the start day; no password is set or shared. The TAP value never appears in notes or logs.",
+      "expected": {
+        "tap_active": {
+          "user": "$ref:create_user.output.id",
+          "startDateTime": "2026-10-12T11:00:00Z"
+        }
+      },
+      "risk_class": "security.credential"
+    },
+    {
+      "id": "license_on_start",
+      "action": "followup.schedule",
+      "params": {
+        "when": "2026-10-12T10:00:00Z",
+        "type": "license.assign",
+        "user_id": "$ref:create_user.output.id",
+        "skuId": "cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46",
+        "skuPartNumber": "SPB"
+      },
+      "depends_on": [
+        "create_user",
+        "buy_seat"
+      ],
+      "rationale": "Start date is in the future (Monday 2026-10-12), so the playbook assigns the peer's SPB license on the start date, before the TAP becomes valid.",
+      "expected": {
+        "followup_scheduled": {
+          "type": "license.assign",
+          "date": "2026-10-12",
+          "skuId": "cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46"
+        }
+      },
+      "risk_class": "write.reversible"
+    },
+    {
+      "id": "send_link",
+      "action": "link.sendOneTime",
+      "params": {
+        "to": "tgarcia@NorthwindParking.onmicrosoft.com",
+        "subject_user": "$ref:create_user.output.id",
+        "includes": [
+          "email_access_steps",
+          "outlook_mobile_app_tip",
+          "file_share_note",
+          "tap_reference"
+        ]
+      },
+      "depends_on": [
+        "tap",
+        "grp_company",
+        "grp_accounting",
+        "grp_finance_files",
+        "grp_rds",
+        "license_on_start"
+      ],
+      "rationale": "Deliver the sign-in details safely to the approved requester through a one-time link. Includes a tip to use the Outlook mobile app instead of the iOS Mail app, which can hit 'needs admin approval', and a note on the Finance Files share.",
+      "expected": {
+        "message_sent": {
+          "to": "tgarcia@NorthwindParking.onmicrosoft.com",
+          "via": "one_time_link"
+        }
+      },
+      "risk_class": "security.credential"
+    }
+  ],
+  "needs_technician": [
+    {
+      "item": "Add Priya to distribution list 'accounting-announce' (a443a24b-ca1f-41be-b888-61c82667a64a)",
+      "reason": "Distribution lists can't be changed through Graph; needs Exchange admin or PowerShell."
+    },
+    {
+      "item": "Hosted desktop server NW-TS-01 access for Priya",
+      "reason": "Peer is in RDS-Users. The server-side setup is outside Graph."
+    },
+    {
+      "item": "Meraki client VPN (cloud auth) access and VPN-Users group membership for Priya",
+      "reason": "Peer is in VPN-Users. Meraki VPN is outside Graph, and VPN access needs approval from marlene@, who was not found in the directory, so confirm who the current VPN approver is."
+    },
+    {
+      "item": "Review the 11 disabled 'Seat Holder' accounts that hold SPB seats",
+      "reason": "These may be reserved seats that could be used instead of buying a new one. Removing licenses is not allowed in the onboarding playbook, and the accounts are marked 'do not use'."
+    }
+  ],
+  "confirm_on_approval": [
+    {
+      "question": "Is priya.nair@NorthwindParking.onmicrosoft.com the right email address?",
+      "proposed": "priya.nair@NorthwindParking.onmicrosoft.com",
+      "evidence": "The directory mixes formats: first (marcus@, kevin@), flast (mchen@, sbaker@), FirstLast (AdityaShah@) and first.last. The most recently created accounts (Luis Ortega, Omar Haddad, Grace Kim, Maria Santos, Emma Clarke, Alex Rivera) all use first.last."
+    },
+    {
+      "question": "Approve buying 1 additional Microsoft 365 Business Premium (SPB) seat?",
+      "proposed": "Purchase 1 \u00d7 SPB (cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46)",
+      "evidence": "subscribedSkus: SPB enabled 25, consumed 25, available 0. Peer Marcus Webb is licensed SPB. 11 disabled 'Seat Holder' placeholder accounts ('do not use') also hold SPB seats; the one checked (seat-holder@) holds SPB."
+    },
+    {
+      "question": "Should Priya get the same hosted desktop (NW-TS-01) and Meraki VPN access as Marcus?",
+      "proposed": "Hosted desktop: yes, via RDS-Users plus technician setup. VPN: only after the VPN approver (marlene) approves.",
+      "evidence": "Marcus is in RDS-Users (d510a287\u2026) and VPN-Users (4a3231a3\u2026). Client facts list marlene@ as the only VPN approver, but no 'Marlene' account exists in the directory."
+    }
+  ],
+  "questions_for_requester": [
+    "Should we use the existing SPB seats held by the disabled 'Seat Holder' placeholder accounts instead of buying a new one?",
+    "What is Priya's job title, and should her manager in Entra be set to you (Taylor), as for Marcus?",
+    "VPN access needs approval from the VPN approver on file (Marlene), who isn't in the directory. Who approves VPN access now?"
+  ],
+  "out_of_scope_requests": [
+    "also make me (Taylor) a Global Admin so I can do this myself next time."
+  ],
+  "escalate": false,
+  "escalation_reason": null
+}

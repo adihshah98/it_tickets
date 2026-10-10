@@ -1,0 +1,32 @@
+# Shared client facts (Tech.MD §6), aligned with the seeded demo tenant. Every playbook loads these.
+# {domain} is replaced with the tenant's domain when loaded.
+client: northwind-parking
+usageLocation: "US"
+upn_format: null              # not documented; directory is mixed → agent proposes, requester confirms
+default_sku: "O365_BUSINESS_ESSENTIALS"   # Microsoft 365 Business Basic; a new hire still mirrors their peer's license
+approvers:
+  user.onboard:  ["tgarcia@{domain}"]
+  user.offboard: ["tgarcia@{domain}"]
+  spend:         ["tgarcia@{domain}"]
+  vpn_access:    ["kevin@{domain}"]
+group_handling:               # how to treat a peer's groups when mirroring access
+  - {group: "Northwind Parking", handling: automatic,
+     note: "Org-wide group; every user is added automatically. Never mirror it."}
+  - {group: "RDS-Users", handling: technician,
+     note: "Marks hosted desktop (NW-TS-01) access. Do not mirror; list under needs_technician."}
+  - {group: "VPN-Users", handling: technician,
+     note: "Marks Meraki VPN access. Do not mirror; list under needs_technician (VPN approver: kevin@{domain})."}
+license_reserve:              # not a problem to report
+  - {users: "seat-holder*",
+     note: "Disabled placeholder accounts holding spare seats on purpose, managed by the MSP. Don't flag or
+            reclaim them; buy seats with license.purchase as usual."}
+non_graph_access:             # exists for this client; agent can't change it → needs_technician
+  - {system: "Hosted desktop server NW-TS-01", how_to_detect: "peer in group 'RDS-Users'"}
+  - {system: "Meraki client VPN (cloud auth, not AD)", how_to_detect: "peer in group 'VPN-Users'"}
+known_service_accounts: ["reports@{domain}"]   # used by a parking app; no MFA support
+oob_contacts: "manager attribute in Entra; fallback: approvers"
+autonomy:                     # per intent for this client; A1 plan only · A2 one approval · A3 auto within the gate's rules
+  user.onboard: A2
+  user.offboard: A2
+  mfa.reset: A2
+  # file.restore_version: added when the learned playbook is approved (A3 in the demo)

@@ -1,0 +1,36 @@
+# Tech.MD §6.1. {domain} is replaced with the tenant's domain when loaded.
+intent: user.onboard
+goal: New hire can sign in on day one with the same access as their peer, credentials delivered safely, in one job.
+must_investigate:
+  - users.search              # already exists / disabled match → rehire?
+  - users.get(peer)           # resolve the coworker the requester referenced
+  - users.memberOf(peer)      # groups to mirror; classify DL / mail-enabled security → needs_technician
+  - users.licenseDetails(peer)  # mirror the peer's license, never guess (Ruben: wrong SKU → upgrade next day)
+  - subscribedSkus.list       # seat availability → spend step if 0
+  - users.list(recent_hires)  # infer email format when client_facts.upn_format is null
+questions_to_resolve:         # answered from the request, investigation, or the approval card
+  - start_date                # future start → license assigned on the start date (followup.schedule)
+  - peer                      # if missing: propose one from the department, state the assumption
+  - upn_format                # if undocumented: propose the recent-hire format; requester confirms on the approval card
+definition_of_done:
+  - user_exists: {upn: "$new_user.upn"}
+  - user_property: {usageLocation: "$client.usageLocation"}
+  - user_has_sku: {sku: "$peer.primarySku"}          # or followup scheduled for the start date
+  - user_in_groups: {groups: "$plan.mirrored_groups"} # Graph-manageable groups only
+  - tap_active: {user: "$new_user"}
+  - message_sent: {to: "$requester", via: "one_time_link", includes: [email_access_steps, outlook_mobile_app_tip, file_share_note]}
+  - needs_technician_listed: {for: "$peer.non_graph_access"}   # hosted desktop, VPN raised now, not as follow-up tickets
+allowed_actions: [user.create, user.update, license.purchase, license.assign,
+                  group.addMember, tap.create, link.sendOneTime, followup.schedule]
+gotchas:
+  - Set usageLocation before assigning a license.
+  - New users may 404 on group add for up to ~60s (executor retries; don't replan for this).
+  - DLs and mail-enabled security groups can't be changed via Graph → needs_technician.
+  - Disabled user with the same name → ask "rehire?" before creating a duplicate.
+  - Directory email formats are mixed; never pick silently.
+  - Recommend the Outlook mobile app; the built-in iOS mail app can hit "needs admin approval".
+  - Follow client_facts.group_handling for the peer's groups; it overrides plain mirroring.
+never:
+  - Assign directory roles or mirror a peer's admin/privileged groups.
+  - Put passwords or TAPs in notes, replies or logs.
+  - Set a human-chosen or patterned password; use a TAP.

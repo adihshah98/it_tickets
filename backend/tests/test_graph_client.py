@@ -81,7 +81,8 @@ async def test_replication_lag_404_retried_when_asked(client, sleeps):
 @respx.mock
 async def test_replication_lag_400_does_not_exist_retried(client, sleeps):
     respx.post(f"{GRAPH}/users/u1/assignLicense").mock(side_effect=[
-        err(400, "Request_BadRequest", "Resource 'u1' does not exist or one of its queried reference-property objects are not present."),
+        err(400, "Request_BadRequest",
+            "Resource 'u1' does not exist or one of its queried reference-property objects are not present."),
         httpx.Response(200, json={"id": "u1"}),
     ])
     assert await client.post("/users/u1/assignLicense", {}, retry_replication=True) == {"id": "u1"}
@@ -99,7 +100,8 @@ async def test_replication_retries_stop_after_five_tries_within_about_a_minute(c
 
 @respx.mock
 async def test_other_400_and_403_fail_immediately(client, sleeps):
-    respx.patch(f"{GRAPH}/users/u1").mock(return_value=err(400, "Request_BadRequest", "Invalid value for usageLocation"))
+    bad_request = err(400, "Request_BadRequest", "Invalid value for usageLocation")
+    respx.patch(f"{GRAPH}/users/u1").mock(return_value=bad_request)
     respx.get(f"{GRAPH}/auditLogs/signIns").mock(return_value=err(403, "Authorization_RequestDenied"))
     with pytest.raises(GraphError):
         await client.patch("/users/u1", {"usageLocation": "XX"}, retry_replication=True)

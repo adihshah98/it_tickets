@@ -1,0 +1,37 @@
+{
+  "intent": "mfa.reset",
+  "summary": "I'm escalating this instead of planning a reset. Dennis says he got a new phone, lost the Authenticator app and can't log in. The directory shows otherwise. His account (4de26d55-a0ad-487f-837c-3d6bec07fce6) was created today at 20:58Z, so there is no old phone. Its only Authenticator entry ('iPhone') seems to have been set up about 20 minutes after the account was created. That followed 2 wrong-password attempts from Sacramento, and he has signed in successfully several times since, the latest at 21:25Z. The ticket also came from his own mailbox. The sign-ins jump from Sacramento (mobile network) to Fremont (about 120 miles) in about 6 minutes. The playbook says to stop and escalate when sign-ins look suspicious. Resetting now would delete the method just set up and issue a Temporary Access Pass (TAP). If someone other than Dennis set it up, that would open a takeover path, so I've planned no steps.",
+  "assumptions": [
+    "The subject is the requester himself, dennis@NorthwindParking.onmicrosoft.com (4de26d55-a0ad-487f-837c-3d6bec07fce6). It is a real person account (manager Taylor Garcia, Facilities, SPB license), not a service account.",
+    "Sign-in times are UTC. Locations from mobile-carrier IPs can be wrong, so the location jump is a signal, not proof.",
+    "riskyUsers could not be checked; no tool for it is available."
+  ],
+  "steps": [],
+  "needs_technician": [
+    {
+      "item": "Out-of-band verification with Dennis's manager Taylor Garcia (tgarcia@NorthwindParking.onmicrosoft.com) by phone, not by replying to the email",
+      "reason": "The ticket's claim (old phone, authenticator lost, can't log in) contradicts the directory: the account was created today and Authenticator was just enrolled with successful sign-ins after it."
+    },
+    {
+      "item": "Review riskyUsers and the full sign-in and audit logs for user 4de26d55-a0ad-487f-837c-3d6bec07fce6 (who created the account; who registered the 'iPhone' Authenticator method and from where)",
+      "reason": "The agent can't read riskyUsers or audit logs. The location jump from Sacramento to Fremont needs a human to judge it."
+    },
+    {
+      "item": "If it's confirmed this wasn't Dennis: revoke sessions, delete Authenticator method 16d4d5ae-4652-414a-88fb-e4949e345084, reset the password and run the compromise response",
+      "reason": "Account-takeover remediation is outside the mfa.reset playbook."
+    },
+    {
+      "item": "If Dennis is legit and simply confused (e.g., he's a new hire mid-onboarding): send him the Outlook mobile app tip and Authenticator setup help, or reset through the normal process after verification",
+      "reason": "He may be confusing first-time setup with a reset. With verified OOB, a normal mfa.reset can be re-run."
+    }
+  ],
+  "confirm_on_approval": [],
+  "questions_for_requester": [
+    "(Ask via the manager by phone, not by email reply) When did you get this account, and did you set up Microsoft Authenticator on a phone today around 2:15 PM Pacific?",
+    "Are you currently able to sign in? Our logs show successful sign-ins to your account in the last hour, from Sacramento and Fremont.",
+    "What exactly happens when you try to log in: which app or site, and what message do you see?"
+  ],
+  "out_of_scope_requests": [],
+  "escalate": true,
+  "escalation_reason": "Possible account takeover or social engineering. Evidence: (1) The account was created 2026-10-09 20:58Z (today), which contradicts 'new phone, authenticator gone'. (2) The only Authenticator method (id 16d4d5ae-4652-414a-88fb-e4949e345084, 'iPhone') appears to have been registered today. The sequence was 2 failed passwords (50126) at 21:13Z and 21:14Z, then a forced MFA enrollment (50072) at 21:16Z, all from Sacramento IP 2600:387:f:4b14::7. (3) Sign-ins succeeded at 21:17Z (Sacramento) and 21:22\u201321:25Z (Fremont, 50.176.148.129). The user is not locked out. (4) Sacramento to Fremont is about 120 miles in about 6 minutes, which looks like impossible travel, although mobile-carrier IP locations are unreliable. (5) The ticket was sent from dennis@ itself while claiming he can't log in. A technician should confirm out-of-band with his manager Taylor Garcia (tgarcia@, also an approved contact) by phone. Check whether Dennis really has this account and whether he or the onboarding technician enrolled the 'iPhone' method. Review the full sign-in and risk logs; riskyUsers isn't available to this agent. If the enrollment wasn't his, revoke sessions, remove the method and reset the password, which is an incident response rather than this playbook."
+}

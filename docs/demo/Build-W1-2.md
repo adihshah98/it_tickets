@@ -34,26 +34,31 @@ it_tickets/
                             httpx, azure-identity, sqlmodel, pyyaml, cryptography
                             dev: pytest, pytest-asyncio, respx, ruff
   backend/tech/
-    config.py               settings from .env and tenant/.env (API key, Graph cert, Fernet key, domain)
+    core/config.py          settings from .env and tenant/.env (API key, Graph cert, Fernet key, domain)
+    core/observability.py   Logfire setup and scrubbing
+    core/models.py          Triage, Plan, Step (params as a discriminated union per action), GateDecision, events
+    core/store.py           SQLModel tables: ticket, run, event, approval, link, followup
     graph/client.py         async Graph client (port of tenant/graph.py)
     graph/reads.py          read tools: functions taking (graph, args), returning trimmed dicts
     graph/writes.py         write actions plus their verify reads
-    catalogue.py            ACTIONS: action -> params model, risk_class, act(), verify(), compensate
     playbooks/              client_facts.yaml, user.onboard.yaml (from Tech.MD section 6, aligned) + loader.py
-    models.py               Triage, Plan, Step (params as a discriminated union per action), GateDecision, events
     agents/intake.py        Haiku -> Triage
     agents/investigator.py  Opus -> Plan; read tools + record_finding; output_validator = linter
-    lint.py                 rules 1-3 (schema, grounded, in scope)
-    gate.py                 requester hold, never/catalogue blocks, risk-class rules, blast radius
-    executor.py             idempotency -> snapshot -> act -> verify, retry policy, step-ref resolution
-    mocks.py                license.purchase (frees the seat-holder's seat), requester.confirmOutOfBand
-    links.py                one-time link service (Fernet-encrypted, view once, expires)
-    scanner.py              secret scanner for outbound text
-    closeout.py             Sonnet drafts (reply, PSA note), time entry, needs-technician list, DoD probes
-    store.py                SQLModel tables: ticket, run, event, approval, link, followup
+    agents/closeout.py      Sonnet drafts (reply, PSA note), time entry, needs-technician list, DoD probes
+    safety/lint.py          rules 1-3 (schema, grounded, in scope)
+    safety/gate.py          requester hold, never/catalogue blocks, risk-class rules, blast radius
+    safety/scanner.py       secret scanner for outbound text
+    execution/catalogue.py  ACTIONS: action -> params model, risk_class, act(), verify(), compensate
+    execution/executor.py   idempotency -> snapshot -> act -> verify, retry policy, step-ref resolution
+    execution/mocks.py      license.purchase (frees the seat-holder's seat), requester.confirmOutOfBand
+    execution/links.py      one-time link service (Fernet-encrypted, view once, expires)
     runner.py               run state machine (RECEIVED -> ... -> DONE / ESCALATED / HELD)
     api.py                  FastAPI: REST + SSE
     cli.py                  headless run / approve, for Week 1 and tests
+
+  safety/ is the "model proposes, code decides" boundary: everything between a Plan and a Graph write.
+  Split core/models.py into a models/ package (triage, params, plan, gate) when Week 3 adds the
+  offboarding and MFA actions.
   backend/tests/            unit (pure), agent (TestModel/FunctionModel), executor (respx), live (marker)
   web/                      Next.js app: inbox, workspace, approval card, link page
   tenant/, spike/           existing; reuse, don't modify except for client-fact alignment

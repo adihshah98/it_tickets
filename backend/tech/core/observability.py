@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import logfire
 
-from tech.config import REPO
+from tech.core.config import REPO
 
-# Logfire already scrubs password/secret/token/api_key/auth/... by default.
-# Add the Graph field that carries a Temporary Access Pass, so it never reaches traces.
-EXTRA_SCRUB_PATTERNS = ["temporaryAccessPass", "temporary_access_pass", r"\btap\b"]
+# Logfire already scrubs password/secret/auth/credential/api_key/... by default, but not "token".
+# Add tokens (access_token, accessToken, id_token...) without catching usage counts like input_tokens,
+# and the Graph field that carries a Temporary Access Pass, so neither reaches traces.
+EXTRA_SCRUB_PATTERNS = [r"token(?!s\b)", "temporaryAccessPass", "temporary_access_pass", r"\btap\b"]
 
 
 def configure_logfire(*, environment: str = "dev", send: bool = True) -> None:

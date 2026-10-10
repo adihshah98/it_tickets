@@ -1,6 +1,6 @@
 import pytest
 
-from tech.config import Settings, read_env_file
+from tech.core.config import Settings, read_env_file
 
 
 def make_repo(tmp_path, tenant_env: str, root_env: str = ""):
