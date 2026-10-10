@@ -145,7 +145,7 @@ it_tickets/
   - `GET /runs/{id}/events` is the SSE stream (replays history, then goes live);
   - `POST /runs/{id}/approval` takes approve all or reject, plus the confirm answers;
   - `POST /followups/{id}/run-now`;
-  - `GET /l/{token}` is the one-time link.
+  - `GET /l/{token}` shows the one-time link's metadata, and `POST /l/{token}/reveal` returns the TAP once. These are two calls so that link previewers can't burn the link (see [Build-Day6.md](Build-Day6.md)).
 - Add `logfire.instrument_fastapi`.
 - Tests: an SSE client receives events in order, and a reconnect replays history.
 
@@ -195,7 +195,7 @@ it_tickets/
 
 - `uv run pytest`: the unit, agent (TestModel) and executor (respx) suites pass offline.
 - `uv run pytest -m live`: after `tenant/reset.py`, runs the CLI path against the tenant and checks the DoD through Graph.
-- Manual: `uvicorn tech.api:app` and `npm run dev` in `web/`. Paste Priya's email as Taylor and approve, confirming `priya.nair@`. Then:
+- Manual: `uvicorn tech.api:create_app --factory` and `npm run dev` in `web/`. Paste Priya's email as Taylor and approve, confirming `priya.nair@`. Then:
   - every step shows verified;
   - the link page shows the TAP exactly once;
   - Priya shows up in the Entra admin center;

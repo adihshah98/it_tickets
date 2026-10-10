@@ -12,7 +12,7 @@ from typing import Any
 
 from sqlmodel import select
 
-from tech.core.store import Followup, Store, utcnow
+from tech.core.store import Followup, NotFound, Store, utcnow
 from tech.graph.writes import Handler
 
 
@@ -20,7 +20,7 @@ def get(store: Store, followup_id: int) -> Followup:
     with store.session() as s:
         row = s.get(Followup, followup_id)
         if row is None:
-            raise KeyError(f"follow-up {followup_id} not found")
+            raise NotFound(f"follow-up {followup_id} not found")
         return row
 
 

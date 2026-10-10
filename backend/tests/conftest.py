@@ -135,3 +135,45 @@ def store():
     from tech.core.store import Store
 
     return Store("sqlite://")
+
+
+# ------------------------------------------------------------------ runner: a run as `tech run` leaves it
+
+TAYLOR = f"tgarcia@{DOMAIN}"
+
+
+@pytest.fixture
+def rt(store, graph, facts, sleeps):
+    from tech.runner import Runtime
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    return Runtime(store=store, graph=graph, facts=facts, domain=DOMAIN, link_key=LINK_KEY, sleep=fake_sleep)
+
+
+@pytest.fixture
+def gated(rt, playbooks):
+    """A run that went through triage, investigation and the real gate, as `tech run` leaves it."""
+    from tech.core.models import Requester, Triage, TriageEntities
+    from tech.core.store import RunState
+    from tech.safety import gate
+
+    def make(plan: Plan | None = None, *, requester: str = TAYLOR, approved: bool = True) -> int:
+        plan = plan or plan_with()
+        store = rt.store
+        run_id = store.create_run(store.create_ticket("new hire Priya", requester).id).id
+        triage = Triage(intents=["user.onboard"], entities=TriageEntities(),
+                        requester=Requester(name="Taylor", email=requester))
+        store.append_event(run_id, "triage", {"triage": triage.model_dump(mode="json"),
+                                              "requester_approved": approved, "requester_scopes": {}})
+        for state in (RunState.TRIAGED, RunState.INVESTIGATING):
+            store.set_state(run_id, state)
+        store.append_event(run_id, "finding", {"text": "Marcus is in Accounting", "t": 1.0})
+        store.append_event(run_id, "plan", {"plan": plan.model_dump(mode="json", by_alias=True), "usage": {}})
+        store.set_state(run_id, RunState.PLAN_PROPOSED)
+        gate.check(store, run_id, plan, requester_approved=approved, intents=["user.onboard"], playbooks=playbooks,
+                   facts=rt.facts, transcript=marcus_transcript())
+        return run_id
+
+    return make

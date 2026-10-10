@@ -1,49 +1,13 @@
 """Runner: approval (answers, approver check, hold release, reject), execution outcomes, resume, follow-ups."""
 
 import pytest
-from conftest import DOMAIN, FINANCE_FILES, LINK_KEY, SPB, marcus_transcript, plan_with
+from conftest import DOMAIN, FINANCE_FILES, SPB, TAYLOR, plan_with
 from fake_tenant import TAP_VALUE
 
 from tech import runner
-from tech.core.models import Plan, Requester, Triage, TriageEntities
 from tech.core.store import RunState
 from tech.execution import scheduler
-from tech.runner import RunError, Runtime
-from tech.safety import gate
-
-TAYLOR = f"tgarcia@{DOMAIN}"
-
-
-@pytest.fixture
-def rt(store, graph, facts, sleeps):
-    async def fake_sleep(seconds):
-        sleeps.append(seconds)
-
-    return Runtime(store=store, graph=graph, facts=facts, domain=DOMAIN, link_key=LINK_KEY, sleep=fake_sleep)
-
-
-@pytest.fixture
-def gated(rt, playbooks):
-    """A run that went through triage, investigation and the real gate, as `tech run` leaves it."""
-
-    def make(plan: Plan | None = None, *, requester: str = TAYLOR, approved: bool = True) -> int:
-        plan = plan or plan_with()
-        store = rt.store
-        run_id = store.create_run(store.create_ticket("new hire Priya", requester).id).id
-        triage = Triage(intents=["user.onboard"], entities=TriageEntities(),
-                        requester=Requester(name="Taylor", email=requester))
-        store.append_event(run_id, "triage", {"triage": triage.model_dump(mode="json"),
-                                              "requester_approved": approved, "requester_scopes": {}})
-        for state in (RunState.TRIAGED, RunState.INVESTIGATING):
-            store.set_state(run_id, state)
-        store.append_event(run_id, "finding", {"text": "Marcus is in Accounting", "t": 1.0})
-        store.append_event(run_id, "plan", {"plan": plan.model_dump(mode="json", by_alias=True), "usage": {}})
-        store.set_state(run_id, RunState.PLAN_PROPOSED)
-        gate.check(store, run_id, plan, requester_approved=approved, intents=["user.onboard"], playbooks=playbooks,
-                   facts=rt.facts, transcript=marcus_transcript())
-        return run_id
-
-    return make
+from tech.runner import RunError
 
 
 def state(rt, run_id):
@@ -188,3 +152,15 @@ def test_transitions_refuse_skipping_states(rt, store):
     runner.transition(store, run_id, RunState.ESCALATED)
     with pytest.raises(RunError):
         runner.transition(store, run_id, RunState.TRIAGED)
+
+
+def test_accept_records_the_approval_and_moves_to_executing_without_acting(rt, gated, tenant):
+    run_id = gated()
+
+    plan = runner.accept(rt, run_id, by=TAYLOR, answers={"upn_format": "pnair"})
+
+    assert state(rt, run_id) == RunState.EXECUTING
+    assert plan.steps[0].params.userPrincipalName == f"pnair@{DOMAIN}"
+    assert not tenant.calls
+    with pytest.raises(RunError, match="EXECUTING"):
+        runner.accept(rt, run_id, by=TAYLOR)

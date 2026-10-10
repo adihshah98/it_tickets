@@ -41,8 +41,12 @@ class RunState(StrEnum):
 EVENT_TYPES = frozenset({
     "state", "triage", "tool_call", "finding", "plan", "lint_result", "gate_decision", "approval",
     "step_started", "step_verified", "step_failed", "replan", "done_check", "message_sent", "error",
-    "playbook_drafted", "playbook_approved",
+    "playbook_drafted", "playbook_approved", "link_viewed",
 })
+
+
+class NotFound(KeyError):
+    """No such run, ticket, link or follow-up. A KeyError, so callers that catch KeyError still work."""
 
 
 def utcnow() -> datetime:
@@ -172,14 +176,14 @@ class Store:
         with self._session() as s:
             run = s.get(Run, run_id)
             if run is None:
-                raise KeyError(f"run {run_id} not found")
+                raise NotFound(f"run {run_id} not found")
             return run
 
     def set_state(self, run_id: int, state: RunState, **detail: Any) -> Event:
         with self._session() as s:
             run = s.get(Run, run_id)
             if run is None:
-                raise KeyError(f"run {run_id} not found")
+                raise NotFound(f"run {run_id} not found")
             previous = run.state
             run.state = state
             run.updated_at = utcnow()
@@ -215,11 +219,17 @@ class Store:
         events = self.events_of(run_id, type)
         return events[-1] if events else None
 
+    def list_runs(self, limit: int = 50) -> list[tuple[Run, Ticket]]:
+        """Most recent runs first, each with its ticket."""
+        with self._session() as s:
+            query = select(Run, Ticket).join(Ticket, Run.ticket_id == Ticket.id).order_by(Run.id.desc()).limit(limit)
+            return list(s.exec(query))
+
     def get_ticket(self, ticket_id: int) -> Ticket:
         with self._session() as s:
             ticket = s.get(Ticket, ticket_id)
             if ticket is None:
-                raise KeyError(f"ticket {ticket_id} not found")
+                raise NotFound(f"ticket {ticket_id} not found")
             return ticket
 
     async def stream(self, run_id: int, after_seq: int = 0) -> AsyncIterator[Event]:

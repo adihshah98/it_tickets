@@ -3,6 +3,8 @@
     start     intake -> investigation (linter in the loop) -> gate. With nothing to approve, executes.
     approve   an approver approves (or rejects) the plan, with their answers to the confirm questions,
               then the executor runs it. Also releases a HELD run: the approver confirms the requester.
+              The API calls the two halves itself: `accept` inline (errors go back to the caller), then
+              `execute` as a background task.
     resume    carries on an execution a crashed process left in EXECUTING.
 
 Each call can run in a new process (the CLI): what a run needs is rebuilt from its events: the plan
@@ -13,6 +15,7 @@ their outputs from `step_verified`. Every transition is checked against TRANSITI
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -24,14 +27,16 @@ from tech.agents.intake import MODEL as INTAKE_MODEL
 from tech.agents.intake import run_intake
 from tech.agents.investigator import MODEL as INVESTIGATOR_MODEL
 from tech.agents.investigator import investigate
+from tech.core.config import REPO, Settings, ensure_link_key
 from tech.core.models import STEP_TYPES, Plan, Triage
+from tech.core.observability import configure_logfire
 from tech.core.store import RunState, Store
 from tech.execution import scheduler
 from tech.execution.catalogue import ACTIONS, FOLLOWUP_ACTIONS
 from tech.execution.executor import Execution
-from tech.graph.client import GraphClient
+from tech.graph.client import GraphClient, graph_from_settings
 from tech.graph.writes import SecretLeak
-from tech.playbooks import ClientFacts
+from tech.playbooks import ClientFacts, load_client_facts
 from tech.safety import gate
 
 S = RunState
@@ -69,6 +74,18 @@ class Runtime:
     domain: str
     link_key: str | None = None
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+
+    @classmethod
+    def from_settings(cls, settings: Settings, *, environment: str) -> Runtime:
+        """The runtime the CLI and the API use: Logfire, the model key, the store, Graph and the facts."""
+        configure_logfire(environment=environment)
+        if settings.anthropic_api_key:  # the Anthropic provider reads it from the environment
+            os.environ.setdefault("ANTHROPIC_API_KEY", settings.anthropic_api_key)
+        if settings.database_url.startswith("sqlite:///"):
+            (REPO / "data").mkdir(exist_ok=True)
+        return cls(store=Store(settings.database_url), graph=graph_from_settings(settings),
+                   facts=load_client_facts(settings.domain), domain=settings.domain,
+                   link_key=ensure_link_key(settings))
 
 
 def transition(store: Store, run_id: int, to: RunState, **detail: Any) -> None:
@@ -164,7 +181,7 @@ async def start(rt: Runtime, run_id: int, text: str, from_address: str, *,
 async def proceed(rt: Runtime, run_id: int) -> RunState:
     """After the gate: a checked plan with nothing to approve runs now; anything else waits."""
     if rt.store.get_run(run_id).state == S.PLAN_CHECKED:
-        await _execute(rt, run_id, load_plan(rt.store, run_id))
+        await execute(rt, run_id, load_plan(rt.store, run_id))
     return rt.store.get_run(run_id).state
 
 
@@ -176,8 +193,11 @@ def approval_scopes(store: Store, run_id: int, facts: ClientFacts) -> list[str]:
     return scopes
 
 
-async def approve(rt: Runtime, run_id: int, *, by: str, answers: dict[str, str] | None = None,
-                  reject: bool = False) -> RunState:
+def accept(rt: Runtime, run_id: int, *, by: str, answers: dict[str, str] | None = None,
+           reject: bool = False) -> Plan | None:
+    """Check and record an approval (or rejection), and move the run on: to EXECUTING with the plan to run
+    (returned), or to ESCALATED on a reject (None). Synchronous, so nothing can slip in between the state
+    check and the transition: a second approval of the same run is refused."""
     answers = answers or {}
     state = rt.store.get_run(run_id).state
     if state not in (S.AWAITING_APPROVAL, S.HELD):
@@ -200,8 +220,16 @@ async def approve(rt: Runtime, run_id: int, *, by: str, answers: dict[str, str] 
     if reject:
         transition(rt.store, run_id, S.ESCALATED, kind="rejected", reason=f"{by} rejected the plan",
                    findings=findings(rt.store, run_id))
-    else:
-        await _execute(rt, run_id, plan)
+        return None
+    transition(rt.store, run_id, S.EXECUTING)
+    return plan
+
+
+async def approve(rt: Runtime, run_id: int, *, by: str, answers: dict[str, str] | None = None,
+                  reject: bool = False) -> RunState:
+    plan = accept(rt, run_id, by=by, answers=answers, reject=reject)
+    if plan is not None:
+        await execute(rt, run_id, plan)
     return rt.store.get_run(run_id).state
 
 
@@ -209,11 +237,11 @@ async def resume(rt: Runtime, run_id: int) -> RunState:
     state = rt.store.get_run(run_id).state
     if state != S.EXECUTING:
         raise RunError(f"run {run_id} is {state}; only an EXECUTING run can be resumed")
-    await _execute(rt, run_id, effective_plan(rt.store, run_id, rt.domain))
+    await execute(rt, run_id, effective_plan(rt.store, run_id, rt.domain))
     return rt.store.get_run(run_id).state
 
 
-async def _execute(rt: Runtime, run_id: int, plan: Plan) -> None:
+async def execute(rt: Runtime, run_id: int, plan: Plan) -> None:
     if rt.store.get_run(run_id).state != S.EXECUTING:
         transition(rt.store, run_id, S.EXECUTING)
     execution = Execution(rt.store, run_id, rt.graph, rt.domain, link_key=rt.link_key, sleep=rt.sleep)

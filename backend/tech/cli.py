@@ -8,7 +8,7 @@
 
 `run` triages, investigates (linter in the loop), gates and, with nothing to approve, executes.
 `approve` executes an approved plan. Each prints the run's events as they are appended (the same
-stream the UI will read).
+stream the API serves over SSE: `uv run uvicorn tech.api:create_app --factory`). Both work on the same store.
 
 Exit code: 0 done or awaiting approval, 1 refused (e.g. approving a DONE run), 2 escalated, 3 held.
 """
@@ -18,18 +18,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import sys
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from tech import runner
-from tech.core.config import REPO, Settings, ensure_link_key
-from tech.core.observability import configure_logfire
+from tech.core.config import Settings
 from tech.core.store import Event, RunState, Store
 from tech.execution import scheduler
-from tech.graph.client import graph_from_settings
-from tech.playbooks import load_client_facts
 
 
 def show(event: Event) -> None:
@@ -90,15 +86,7 @@ def exit_code(store: Store, run_id: int) -> int:
 
 
 async def with_runtime(work: Callable[[runner.Runtime], Awaitable[int]]) -> int:
-    settings = Settings.load()
-    configure_logfire(environment="cli")
-    if settings.anthropic_api_key:  # the Anthropic provider reads it from the environment
-        os.environ.setdefault("ANTHROPIC_API_KEY", settings.anthropic_api_key)
-    if settings.database_url.startswith("sqlite:///"):
-        (REPO / "data").mkdir(exist_ok=True)
-    rt = runner.Runtime(store=Store(settings.database_url), graph=graph_from_settings(settings),
-                        facts=load_client_facts(settings.domain), domain=settings.domain,
-                        link_key=ensure_link_key(settings))
+    rt = runner.Runtime.from_settings(Settings.load(), environment="cli")
     try:
         return await work(rt)
     except (runner.RunError, KeyError) as exc:
