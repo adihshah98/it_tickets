@@ -25,7 +25,7 @@ def test_every_onboarding_action_is_covered():
 
 def test_every_action_has_a_verify_read_and_compensation():
     for spec in ACTIONS.values():
-        assert spec.verify and spec.compensate and spec.implementation
+        assert spec.verify and spec.compensate and spec.implementation and spec.handler
 
 
 @pytest.mark.parametrize(("action", "risk"), [

@@ -145,7 +145,8 @@ class GroupAddMemberParams(Params):
 class TapCreateParams(Params):
     userId: ObjectIdOrRef = alias("userId", "user_id")
     startDateTime: datetime | None = alias("startDateTime", "start_date_time", default=None)
-    lifetimeInMinutes: int = alias("lifetimeInMinutes", "lifetime_in_minutes", default=60, ge=10, le=43200)
+    lifetimeInMinutes: int = alias("lifetimeInMinutes", "lifetime_in_minutes", default=480, ge=60, le=480,
+                                   description="The tenant's TAP policy allows 60-480 minutes")
     isUsableOnce: bool = alias("isUsableOnce", "is_usable_once", default=False)
 
 

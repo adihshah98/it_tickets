@@ -49,12 +49,15 @@ def test_spike_onboard_plan_rejects_a_password_and_an_inline_tap_field():
     assert errors(spike_plan("onboard")) == {
         (("steps", 0, "user.create", "params", "passwordProfile"), "extra_forbidden"),
         (("steps", 7, "link.sendOneTime", "params", "content"), "extra_forbidden"),
+        # 720 minutes is over the tenant's TAP policy maximum (480), so Graph would reject it.
+        (("steps", 6, "tap.create", "params", "lifetimeInMinutes"), "less_than_equal"),
     }
 
 
 def test_spike_onboard_plan_round_trips_once_fixed():
     data = spike_plan("onboard")
     del data["steps"][0]["params"]["passwordProfile"]
+    data["steps"][6]["params"]["lifetimeInMinutes"] = 480
     link = data["steps"][7]["params"]
     content = link.pop("content")
     link |= {"tap": content["tap"], "includes": content["includes"], "note": content["notes"]}

@@ -1,0 +1,297 @@
+"""Write handlers (Tech.MD §4.6, §7): what the executor calls for each Graph action. Never offered to a model.
+
+Each handler takes the step's resolved params (Graph names, as the plan dumps them) and has four parts:
+
+  existing  the target state is already true: return the step's output and skip the act (idempotency)
+  snapshot  the pre-state, for the audit log and rollback
+  act       the Graph call; returns the step's output (later steps reference `output.id`)
+  verify    a read-back: (ok, observed facts). Called again on a lag, so it must be a pure read.
+
+Outputs and observed facts go into events, so they never hold a secret. A TAP goes into the run's
+`Secrets` (memory only), and a new user's random password is sent once and kept nowhere.
+
+`Deviation` means the tenant contradicts the plan (the user already exists, a TAP is already there).
+It is not retried; in Week 1 it escalates the run, from Week 3 it triggers a replan.
+"""
+
+from __future__ import annotations
+
+import json
+import secrets as random
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
+
+from tech.graph.client import GRAPH, GraphClient, GraphError
+
+if TYPE_CHECKING:
+    from tech.core.store import Store
+
+SEAT_DELAYS = (15.0, 15.0, 15.0, 15.0)  # a seat freed by the mock purchase can take ~1 min to be assignable
+
+
+class Deviation(RuntimeError):
+    """The tenant's state contradicts the plan. Not retryable."""
+
+
+class SecretLeak(RuntimeError):
+    """A secret was about to be written to an event."""
+
+
+class Secrets:
+    """Secrets one execution holds in memory only: TAP values by step, plus anything else to keep out of events."""
+
+    def __init__(self) -> None:
+        self._taps: dict[str, dict[str, Any]] = {}
+        self._watched: set[str] = set()
+
+    def put_tap(self, step_id: str, *, user_id: str, value: str, expires_at: datetime) -> None:
+        self._taps[step_id] = {"value": value, "userId": user_id.lower(), "expiresAt": expires_at}
+        self.watch(value)
+
+    def tap(self, step_id: str) -> dict[str, Any] | None:
+        return self._taps.get(step_id)
+
+    def tap_for_user(self, user_id: str) -> dict[str, Any] | None:
+        return next((t for t in self._taps.values() if t["userId"] == user_id.lower()), None)
+
+    def watch(self, value: str) -> None:
+        self._watched.add(value)
+
+    def guard(self, payload: Any) -> None:
+        """Raise before a payload holding a secret reaches the event log. The Day 8 scanner generalises this."""
+        text = json.dumps(payload, default=str)
+        if any(value in text for value in self._watched):
+            raise SecretLeak("an event payload contained a secret; it was not written")
+
+
+@dataclass
+class StepContext:
+    graph: GraphClient
+    store: Store
+    run_id: int
+    step_id: str
+    domain: str
+    secrets: Secrets
+    link_key: str | None = None
+    resumed: bool = False  # the step was started in an earlier process and never finished
+    sleep: Callable[[float], Awaitable[None]] = field(default=None)  # type: ignore[assignment]
+
+
+def same(a: Any, b: Any) -> bool:
+    """Loose equality for verify: case-insensitive for scalars (Graph echoes case-preserved UPNs, the model
+    writes 'true' or True)."""
+    if isinstance(a, (dict, list)) or isinstance(b, (dict, list)):
+        return a == b
+    return str(a).strip().casefold() == str(b).strip().casefold()
+
+
+class Handler:
+    async def existing(self, ctx: StepContext, p: dict[str, Any]) -> dict[str, Any] | None:
+        return None
+
+    async def snapshot(self, ctx: StepContext, p: dict[str, Any]) -> dict[str, Any]:
+        return {}
+
+    async def act(self, ctx: StepContext, p: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+    async def verify(self, ctx: StepContext, p: dict[str, Any], output: dict[str, Any]) -> tuple[bool, dict]:
+        raise NotImplementedError
+
+
+# ------------------------------------------------------------------ shared reads
+
+
+async def get_or_none(graph: GraphClient, path: str, **kw: Any) -> dict | None:
+    try:
+        return await graph.get(path, **kw)
+    except GraphError as exc:
+        if exc.status == 404:
+            return None
+        raise
+
+
+async def license_skus(graph: GraphClient, user_id: str) -> set[str]:
+    return {d["skuId"].lower() async for d in graph.list(f"/users/{user_id}/licenseDetails", retry_replication=True)}
+
+
+async def member_group_ids(graph: GraphClient, user_id: str) -> set[str]:
+    return {g["id"].lower() async for g in graph.list(f"/users/{user_id}/memberOf", {"$select": "id"},
+                                                       retry_replication=True)}
+
+
+async def assign_license(ctx: StepContext, user_id: str, *, add: list[str] = (), remove: list[str] = ()) -> None:
+    """assignLicense, waiting out a seat that was only just freed ("does not have any available licenses")."""
+    body = {"addLicenses": [{"skuId": s, "disabledPlans": []} for s in add], "removeLicenses": list(remove)}
+    for delay in (*SEAT_DELAYS, None):
+        try:
+            await ctx.graph.post(f"/users/{user_id}/assignLicense", body, retry_replication=True)
+            return
+        except GraphError as exc:
+            if delay is None or "available licenses" not in exc.message.lower():
+                raise
+            await ctx.sleep(delay)
+
+
+# ------------------------------------------------------------------ users
+
+USER_CHECKED = ("userPrincipalName", "displayName", "usageLocation", "department", "jobTitle", "accountEnabled")
+
+
+class UserCreate(Handler):
+    async def existing(self, ctx, p):
+        upn = p["userPrincipalName"]
+        user = await get_or_none(ctx.graph, f"/users/{quote(upn)}", params={"$select": "id,displayName"})
+        if user is None:
+            return None
+        if ctx.resumed:  # created by this step in a run that stopped before verifying
+            return {"id": user["id"], "userPrincipalName": upn}
+        raise Deviation(f"{upn} already exists ({user.get('displayName')}, {user['id']}) and this run didn't "
+                        "create it: a rehire, a duplicate, or a demo tenant that wasn't reset")
+
+    async def snapshot(self, ctx, p):
+        return {"exists": False}
+
+    async def act(self, ctx, p):
+        password = random.token_urlsafe(24) + "!a1"  # meets complexity; the user signs in with the TAP
+        ctx.secrets.watch(password)
+        body = {k: v for k, v in p.items() if v is not None} | {
+            "passwordProfile": {"password": password, "forceChangePasswordNextSignIn": True},
+        }
+        user = await ctx.graph.post("/users", body)
+        return {"id": user["id"], "userPrincipalName": user["userPrincipalName"]}
+
+    async def verify(self, ctx, p, output):
+        user = await get_or_none(ctx.graph, f"/users/{output['id']}",
+                                  params={"$select": "id," + ",".join(USER_CHECKED)}, retry_replication=True)
+        if user is None:
+            return False, {"exists": False}
+        observed = {"exists": True} | {k: user.get(k) for k in USER_CHECKED}
+        return all(same(p[k], observed[k]) for k in USER_CHECKED if p.get(k) is not None), observed
+
+
+class UserUpdate(Handler):
+    @staticmethod
+    def _changes(p):
+        return {k: v for k, v in p.items() if k != "userId" and v is not None}
+
+    async def _read(self, ctx, p):
+        fields = ",".join(self._changes(p))
+        return await ctx.graph.get(f"/users/{p['userId']}", params={"$select": f"id,{fields}"},
+                                   retry_replication=True)
+
+    async def existing(self, ctx, p):
+        user = await self._read(ctx, p)
+        if all(same(v, user.get(k)) for k, v in self._changes(p).items()):
+            return {"id": p["userId"]}
+        return None
+
+    async def snapshot(self, ctx, p):
+        user = await self._read(ctx, p)
+        return {k: user.get(k) for k in self._changes(p)}
+
+    async def act(self, ctx, p):
+        await ctx.graph.patch(f"/users/{p['userId']}", self._changes(p), retry_replication=True)
+        return {"id": p["userId"]}
+
+    async def verify(self, ctx, p, output):
+        user = await self._read(ctx, p)
+        observed = {k: user.get(k) for k in self._changes(p)}
+        return all(same(v, observed[k]) for k, v in self._changes(p).items()), observed
+
+
+# ------------------------------------------------------------------ licenses and groups
+
+
+class LicenseAssign(Handler):
+    async def existing(self, ctx, p):
+        if p["skuId"].lower() in await license_skus(ctx.graph, p["userId"]):
+            return {"id": p["userId"], "skuId": p["skuId"]}
+        return None
+
+    async def snapshot(self, ctx, p):
+        return {"skus": sorted(await license_skus(ctx.graph, p["userId"]))}
+
+    async def act(self, ctx, p):
+        await assign_license(ctx, p["userId"], add=[p["skuId"]])
+        return {"id": p["userId"], "skuId": p["skuId"]}
+
+    async def verify(self, ctx, p, output):
+        has = p["skuId"].lower() in await license_skus(ctx.graph, p["userId"])
+        return has, {"hasSku": has, "skuId": p["skuId"]}
+
+
+class GroupAddMember(Handler):
+    async def existing(self, ctx, p):
+        if p["groupId"].lower() in await member_group_ids(ctx.graph, p["userId"]):
+            return {"groupId": p["groupId"], "userId": p["userId"]}
+        return None
+
+    async def snapshot(self, ctx, p):
+        return {"isMember": False}
+
+    async def act(self, ctx, p):
+        body = {"@odata.id": f"{GRAPH}/directoryObjects/{p['userId']}"}
+        try:  # a new user can 404 here for up to a minute (playbook gotcha); the client retries that
+            await ctx.graph.post(f"/groups/{p['groupId']}/members/$ref", body, retry_replication=True)
+        except GraphError as exc:
+            if not (exc.status == 400 and "already exist" in exc.message.lower()):
+                raise
+        return {"groupId": p["groupId"], "userId": p["userId"]}
+
+    async def verify(self, ctx, p, output):
+        member = p["groupId"].lower() in await member_group_ids(ctx.graph, p["userId"])
+        return member, {"isMember": member, "groupId": p["groupId"]}
+
+
+# ------------------------------------------------------------------ credentials
+
+
+class TapCreate(Handler):
+    def _path(self, p):
+        return f"/users/{p['userId']}/authentication/temporaryAccessPassMethods"
+
+    async def existing(self, ctx, p):
+        taps = [t async for t in ctx.graph.list(self._path(p), retry_replication=True)]
+        if taps:  # a TAP's value can't be read back, so an existing one can't be delivered
+            when = "this run created it in an earlier process" if ctx.resumed else "this run didn't create it"
+            raise Deviation(f"the user already has a Temporary Access Pass ({when}); its value can't be read "
+                            "back. Delete it and create a new one to send a link")
+        return None
+
+    async def snapshot(self, ctx, p):
+        return {"taps": 0}
+
+    async def act(self, ctx, p):
+        body = {"lifetimeInMinutes": p["lifetimeInMinutes"], "isUsableOnce": p["isUsableOnce"]}
+        if p.get("startDateTime"):
+            body["startDateTime"] = p["startDateTime"]
+        tap = await ctx.graph.post(self._path(p), body, retry_replication=True)
+        start = datetime.fromisoformat(tap.get("startDateTime") or datetime.now(UTC).isoformat())
+        lifetime = tap.get("lifetimeInMinutes", p["lifetimeInMinutes"])
+        expires = start + timedelta(minutes=lifetime)
+        ctx.secrets.put_tap(ctx.step_id, user_id=p["userId"], value=tap["temporaryAccessPass"], expires_at=expires)
+        return {"id": tap["id"], "userId": p["userId"], "startDateTime": start.isoformat(),
+                "lifetimeInMinutes": lifetime, "isUsableOnce": tap.get("isUsableOnce", p["isUsableOnce"]),
+                "expiresAt": expires.isoformat()}
+
+    async def verify(self, ctx, p, output):
+        taps = {t["id"]: t async for t in ctx.graph.list(self._path(p), retry_replication=True)}
+        tap = taps.get(output["id"])
+        if tap is None:
+            return False, {"exists": False}
+        # Not isUsable: a TAP that starts on the start date reads back unusable ("NotYetValid") until then,
+        # which is correct, so it must not be compared with a plan's expected {"isUsable": true}.
+        return True, {"exists": True, "usability": tap.get("methodUsabilityReason")}
+
+
+HANDLERS: dict[str, Handler] = {
+    "user.create": UserCreate(),
+    "user.update": UserUpdate(),
+    "license.assign": LicenseAssign(),
+    "group.addMember": GroupAddMember(),
+    "tap.create": TapCreate(),
+}

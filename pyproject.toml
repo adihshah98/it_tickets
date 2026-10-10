@@ -40,6 +40,9 @@ asyncio_default_fixture_loop_scope = "function"
 markers = ["live: talks to the real demo tenant or model API (run after tenant/reset.py)"]
 addopts = "-m 'not live'"
 
+[tool.logfire]
+ignore_no_config = true
+
 [tool.ruff]
 line-length = 120
 target-version = "py312"

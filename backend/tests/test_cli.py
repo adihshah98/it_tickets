@@ -21,6 +21,18 @@ EVENTS = [
     ("gate_decision", {"step_id": "tap", "action": "tap.create", "decision": "approve",
                        "rule_id": "risk.security.credential", "reason": "r", "risk_class": "security.credential"}),
     ("plan", {"plan": {}, "usage": {}}),
+    ("approval", {"by": "tgarcia@x", "decision": "approve", "answers": {"upn_format": "pnair"},
+                  "released_hold": False}),
+    ("approval", {"by": "tgarcia@x", "decision": "reject", "answers": {}, "released_hold": False}),
+    ("step_started", {"step_id": "s1", "action": "user.create", "params": {}, "snapshot": {}, "t": 5.0}),
+    ("step_verified", {"step_id": "s1", "action": "user.create", "output": {}, "observed": {}, "unchecked": [],
+                       "t": 6.0}),
+    ("step_verified", {"step_id": "s2", "action": "license.purchase", "output": {}, "observed": {}, "unchecked": [],
+                       "skipped": "already true", "t": 6.0}),
+    ("step_failed", {"step_id": "s3", "action": "group.addMember", "error": "403 x: no", "kind": "graph", "t": 7.0}),
+    ("state", {"from": "EXECUTING", "to": "ESCALATED", "kind": "execution", "reason": "s3: 403",
+               "failed_step": "s3", "done": ["s1"], "findings": [],
+               "rollback": [{"step_id": "s1", "action": "user.create", "compensate": "DELETE /users/{id}"}]}),
 ]
 
 
@@ -28,3 +40,12 @@ EVENTS = [
 def test_every_event_prints(type_, payload, capsys):
     show(Event(run_id=1, seq=1, type=type_, payload=payload))
     assert type_ == "plan" or capsys.readouterr().out.strip()
+
+
+def test_parse_answers():
+    from tech.cli import parse_answers
+
+    assert parse_answers(["upn_format=pnair", "start_date = 2026-10-19"]) == {
+        "upn_format": "pnair", "start_date": "2026-10-19"}
+    with pytest.raises(SystemExit):
+        parse_answers(["pnair"])

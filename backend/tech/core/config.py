@@ -29,6 +29,7 @@ class Settings:
     domain: str
     anthropic_api_key: str | None
     database_url: str
+    link_key: str | None = None  # Fernet key for one-time links; see ensure_link_key
 
     @classmethod
     def load(cls, repo: Path = REPO) -> Settings:
@@ -44,4 +45,20 @@ class Settings:
             domain=env["M365_DOMAIN"],
             anthropic_api_key=env.get("ANTHROPIC_API_KEY") or None,
             database_url=env.get("DATABASE_URL", f"sqlite:///{repo / 'data' / 'tech.db'}"),
+            link_key=env.get("LINK_KEY") or None,
         )
+
+
+def ensure_link_key(settings: Settings, repo: Path = REPO) -> str:
+    """The Fernet key that encrypts TAPs in one-time links. Created once and appended to the repo's .env."""
+    if settings.link_key:
+        return settings.link_key
+    from cryptography.fernet import Fernet
+
+    key = Fernet.generate_key().decode()
+    env_file = repo / ".env"
+    text = env_file.read_text() if env_file.exists() else ""
+    sep = "" if not text or text.endswith("\n") else "\n"
+    note = "# Encrypts TAPs in one-time links (created by the app). Never commit."
+    env_file.write_text(f"{text}{sep}{note}\nLINK_KEY={key}\n")
+    return key

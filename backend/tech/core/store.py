@@ -4,7 +4,8 @@ Every state transition and every thing the UI shows is an event. The same events
 audit trail and, later, the replay log. Events are numbered per run (seq 1, 2, 3...) so a
 client can resume a stream from the last seq it saw.
 
-Approval, link and follow-up tables arrive with the days that need them.
+Links (one-time credential links) and follow-ups (scheduled work) have their own tables; their
+modules (execution/links.py, execution/scheduler.py) own the logic.
 """
 
 from __future__ import annotations
@@ -74,6 +75,41 @@ class Event(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class Link(SQLModel, table=True):
+    """A one-time link carrying a TAP, encrypted. The token is the URL's secret part."""
+
+    __table_args__ = (UniqueConstraint("run_id", "step_id"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: int = Field(foreign_key="run.id", index=True)
+    step_id: str
+    token: str = Field(index=True, unique=True)
+    ciphertext: str
+    user_id: str
+    to: str
+    includes: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    note: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    expires_at: datetime
+    viewed_at: datetime | None = None
+
+
+class Followup(SQLModel, table=True):
+    """Work scheduled for later by a followup.schedule step, e.g. assigning a license on the start date."""
+
+    __table_args__ = (UniqueConstraint("run_id", "step_id"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: int = Field(foreign_key="run.id", index=True)
+    step_id: str
+    kind: str
+    run_at: datetime
+    params: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    status: str = "scheduled"  # scheduled | done | failed
+    created_at: datetime = Field(default_factory=utcnow)
+    done_at: datetime | None = None
+
+
 class EventBus:
     """In-process pub/sub so SSE clients see events as they are appended."""
 
@@ -110,8 +146,10 @@ class Store:
         SQLModel.metadata.create_all(self.engine)
         self.bus = bus or EventBus()
 
-    def _session(self) -> Session:
+    def session(self) -> Session:
         return Session(self.engine, expire_on_commit=False)
+
+    _session = session
 
     # -------------------------------------------------------------- tickets and runs
 
@@ -167,6 +205,22 @@ class Store:
         with self._session() as s:
             query = select(Event).where(Event.run_id == run_id, Event.seq > after_seq).order_by(Event.seq)
             return list(s.exec(query))
+
+    def events_of(self, run_id: int, type: str) -> list[Event]:
+        with self._session() as s:
+            query = select(Event).where(Event.run_id == run_id, Event.type == type).order_by(Event.seq)
+            return list(s.exec(query))
+
+    def last_event(self, run_id: int, type: str) -> Event | None:
+        events = self.events_of(run_id, type)
+        return events[-1] if events else None
+
+    def get_ticket(self, ticket_id: int) -> Ticket:
+        with self._session() as s:
+            ticket = s.get(Ticket, ticket_id)
+            if ticket is None:
+                raise KeyError(f"ticket {ticket_id} not found")
+            return ticket
 
     async def stream(self, run_id: int, after_seq: int = 0) -> AsyncIterator[Event]:
         """History after `after_seq`, then live events. Subscribes before replaying, so nothing

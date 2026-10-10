@@ -62,7 +62,7 @@ ONBOARD_PLAN = {
         step("assign_license_monday", "followup.schedule", {
             "kind": "license.assign", "runAt": "2026-10-12T10:00:00Z", "userId": NEW, "skuId": SPB},
              "none", ("create_user", "buy_seat")),
-        step("tap", "tap.create", {"userId": NEW, "lifetimeInMinutes": 720}, "security.credential", ("create_user",)),
+        step("tap", "tap.create", {"userId": NEW, "lifetimeInMinutes": 480}, "security.credential", ("create_user",)),
         step("send_link", "link.sendOneTime", {"to": f"tgarcia@{DOMAIN}", "userId": NEW, "tap": "$ref:tap.output.tap"},
              "none", ("tap",)),
     ],
@@ -88,3 +88,50 @@ def facts():
 @pytest.fixture
 def playbooks():
     return load_playbooks(["user.onboard"], DOMAIN)
+
+
+# ------------------------------------------------------------------ execution: a fake tenant behind respx
+
+LINK_KEY = "oZ52dGBlFpEMoBqyaDWCIMI_ZhKuu6Tj2RCvSlfPIHE="  # a fixed Fernet key for tests
+
+
+@pytest.fixture
+def tenant():
+    import respx
+    from fake_tenant import FakeTenant
+
+    t = FakeTenant(DOMAIN)
+    t.add_user("marcus", "Marcus Webb", MARCUS)
+    t.licenses[t.seat_holder] = {SPB}
+    with respx.mock(assert_all_called=False) as router:
+        router.route(host="graph.microsoft.com").mock(side_effect=t)
+        yield t
+
+
+@pytest.fixture
+def sleeps():
+    return []
+
+
+@pytest.fixture
+async def graph(sleeps):
+    import time
+
+    from tech.graph.client import GraphClient
+
+    async def tokens():
+        return "tok", time.time() + 3600
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    client = GraphClient(tokens, sleep=fake_sleep)
+    yield client
+    await client.aclose()
+
+
+@pytest.fixture
+def store():
+    from tech.core.store import Store
+
+    return Store("sqlite://")

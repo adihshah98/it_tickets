@@ -46,3 +46,17 @@ def test_read_env_file_ignores_comments_and_blank_lines(tmp_path):
     p = tmp_path / ".env"
     p.write_text("# x\n\nA=1\nB = two words \n")
     assert read_env_file(p) == {"A": "1", "B": "two words"}
+
+
+def test_link_key_is_created_once_and_appended_to_the_repo_env(tmp_path, monkeypatch):
+    from cryptography.fernet import Fernet
+
+    from tech.core.config import ensure_link_key
+
+    monkeypatch.delenv("LINK_KEY", raising=False)
+    repo = make_repo(tmp_path, TENANT_ENV, "ANTHROPIC_API_KEY=sk-test")
+    key = ensure_link_key(Settings.load(repo), repo)
+    Fernet(key.encode())  # a valid key
+    assert read_env_file(repo / ".env") == {"ANTHROPIC_API_KEY": "sk-test", "LINK_KEY": key}
+    assert Settings.load(repo).link_key == key
+    assert ensure_link_key(Settings.load(repo), repo) == key
