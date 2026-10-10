@@ -81,6 +81,11 @@ def load_playbook(intent: str, domain: str) -> Playbook:
     return playbook
 
 
+def load_playbooks(for_intents: list[str], domain: str) -> dict[str, Playbook]:
+    """The playbooks for the triaged intents that have one (none for 'unknown' or a no-playbook intent)."""
+    return {i: load_playbook(i, domain) for i in for_intents if i in intents()}
+
+
 def prompt_text(for_intents: list[str], domain: str) -> str:
     """Client facts plus the playbooks for the triaged intents, as YAML, for the investigator's instructions."""
     parts = [_text(CLIENT_FACTS, domain)]

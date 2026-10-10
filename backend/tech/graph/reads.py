@@ -35,20 +35,42 @@ class ToolCall:
     error: str | None = None
 
 
+OBJECT_FIELDS = ("displayName", "kind", "roleAssignable", "userPrincipalName", "skuPartNumber")
+
+
 @dataclass
 class Transcript:
-    """What the investigator looked at in one run: the calls, and every object ID it saw."""
+    """What the investigator looked at in one run: the calls, every object ID it saw, and what it
+    saw about each object (name, group kind...), so the linter and gate can judge a step's target."""
 
     calls: list[ToolCall] = field(default_factory=list)
     observed_ids: set[str] = field(default_factory=set)
+    objects: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def record(self, tool: str, args: dict[str, Any], result: Any = None, error: str | None = None) -> None:
         self.calls.append(ToolCall(tool, args, error))
         if result is not None:
             self.observed_ids |= {m.lower() for m in GUID_RE.findall(json.dumps(result, default=str))}
+            self._collect(result)
+
+    def _collect(self, value: Any) -> None:
+        if isinstance(value, list):
+            for item in value:
+                self._collect(item)
+        elif isinstance(value, dict):
+            object_id = value.get("id") or value.get("skuId")
+            if isinstance(object_id, str) and GUID_RE.fullmatch(object_id):
+                seen = {k: value[k] for k in OBJECT_FIELDS if value.get(k) is not None}
+                self.objects.setdefault(object_id.lower(), {}).update(seen)
+            for item in value.values():
+                self._collect(item)
 
     def observed(self, object_id: str) -> bool:
         return object_id.lower() in self.observed_ids
+
+    def object(self, object_id: str) -> dict[str, Any]:
+        """What was seen about an object; {} if nothing (or only its ID inside some text)."""
+        return self.objects.get(object_id.lower(), {})
 
     def called(self, tool: str) -> bool:
         return any(c.tool == tool and c.error is None for c in self.calls)
@@ -109,10 +131,12 @@ async def users_get(graph: GraphClient, user_id: str) -> dict:
 
 
 async def users_member_of(graph: GraphClient, user_id: str) -> list[dict]:
-    """A user's groups, each classified as m365 | security | mail_security | distribution_list."""
-    params = {"$select": "id,displayName,groupTypes,mailEnabled,securityEnabled,mail"}
+    """A user's groups, each classified as m365 | security | mail_security | distribution_list.
+    roleAssignable: the group can hold directory roles (privileged)."""
+    params = {"$select": "id,displayName,groupTypes,mailEnabled,securityEnabled,mail,isAssignableToRole"}
     return [
-        {"id": g["id"], "displayName": g.get("displayName"), "kind": classify(g), "mail": g.get("mail")}
+        {"id": g["id"], "displayName": g.get("displayName"), "kind": classify(g), "mail": g.get("mail"),
+         "roleAssignable": bool(g.get("isAssignableToRole"))}
         async for g in graph.list(f"/users/{user_id}/memberOf", params)
         if g.get("@odata.type") == "#microsoft.graph.group"
     ]

@@ -4,6 +4,9 @@ Only read tools and `record_finding` are registered; no write tool exists on thi
 can only propose. Every tool call and finding is a run event (UI, audit, replay), and every read goes
 through `run_read`, so the Transcript holds the observed IDs the Day 4 linter checks plans against.
 
+The linter (safety/lint.py, rules 1-3) is the output validator: a rejected plan goes back to the
+model with the reasons, at most LINT_RETRIES times, and each attempt is a lint_result event.
+
 Bounds (§4.1, §9):
   - At most MAX_READS Graph reads. After that the read tools answer "budget used up" so the model
     submits what it has, as §4.1 asks, instead of the run failing.
@@ -20,7 +23,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Literal
 
-from pydantic_ai import Agent, RunContext, ToolOutput
+from pydantic_ai import Agent, ModelRetry, RunContext, ToolOutput
 from pydantic_ai.exceptions import (
     ContentFilterError,
     ModelAPIError,
@@ -35,11 +38,13 @@ from tech.core.models import Plan, Triage
 from tech.core.store import RunState, Store
 from tech.graph.client import GraphClient, GraphError
 from tech.graph.reads import Transcript, run_read
-from tech.playbooks import ClientFacts, prompt_text
+from tech.playbooks import ClientFacts, Playbook, load_playbooks, prompt_text
+from tech.safety.lint import lint
 
 MODEL = "anthropic:claude-opus-5-5"
 MAX_READS = 25
 TIMEOUT_S = 90.0
+LINT_RETRIES = 2
 LIMITS = UsageLimits(request_limit=20, tool_calls_limit=MAX_READS + 25)
 
 SETTINGS = AnthropicModelSettings(
@@ -59,6 +64,8 @@ Rules:
 - You cannot change anything. You only propose a plan; code checks it and a human approves it.
 - Cover every must_investigate item of the matching playbook with an actual tool call.
 - Use object IDs you observed (user ids, group ids, skuIds). Never invent IDs or names.
+- Follow client_facts.group_handling for every group. Groups Graph can't change (distribution
+  lists, mail-enabled security groups) go under needs_technician, not into steps.
 - Call record_finding with a short line whenever you learn something that matters, so the
   technician watching can follow along.
 - At most {max_reads} reads. Prefer calling independent reads in parallel.
@@ -98,14 +105,22 @@ class Recorder:
         self.findings.append(text)
         self.store.append_event(self.run_id, "finding", {"text": text, "t": self.elapsed()})
 
+    def lint_result(self, attempt: int, problems: list[str]) -> None:
+        self.store.append_event(self.run_id, "lint_result", {
+            "attempt": attempt, "ok": not problems, "problems": problems, "t": self.elapsed(),
+        })
+
 
 @dataclass
 class InvestigateDeps:
     graph: GraphClient
     facts: ClientFacts
     recorder: Recorder
+    playbooks: dict[str, Playbook] = field(default_factory=dict)
     transcript: Transcript = field(default_factory=Transcript)
     max_reads: int = MAX_READS
+    lint_attempts: int = 0
+    last_problems: list[str] = field(default_factory=list)
 
 
 # ------------------------------------------------------------------ tools (read-only)
@@ -193,18 +208,32 @@ READ_TOOLS = [users_search, users_list, users_get, users_member_of, users_owned_
 TOOLS = [*READ_TOOLS, record_finding]
 
 
+async def lint_plan(ctx: RunContext[InvestigateDeps], plan: Plan) -> Plan:
+    """Output validator: rules 1-3. Problems go back to the model as a retry."""
+    deps = ctx.deps
+    deps.lint_attempts += 1
+    deps.last_problems = lint(plan, deps.transcript, deps.playbooks, deps.facts)
+    deps.recorder.lint_result(deps.lint_attempts, deps.last_problems)
+    if deps.last_problems:
+        raise ModelRetry("Plan rejected. Fix these and submit the whole plan again:\n"
+                         + "\n".join(f"- {p}" for p in deps.last_problems))
+    return plan
+
+
 def build_investigator(model: Model | str = MODEL) -> Agent[InvestigateDeps, Plan]:
-    return Agent(
+    agent = Agent(
         model,
         deps_type=InvestigateDeps,
         # Tool output, not strict: thinking (effort) would otherwise switch to strict native output, and
         # Anthropic rejects the Plan union's grammar as too large and forces the `expected` dicts to {}.
-        output_type=ToolOutput(Plan, strict=False),
+        output_type=ToolOutput(Plan, strict=False, max_retries=LINT_RETRIES),
         tools=TOOLS,
         retries=2,
         model_settings=SETTINGS,
         name="investigator",
     )
+    agent.output_validator(lint_plan)
+    return agent
 
 
 # ------------------------------------------------------------------ run
@@ -216,6 +245,8 @@ class Investigation:
     plan: Plan | None
     findings: list[str]
     reason: str | None = None
+    transcript: Transcript = field(default_factory=Transcript)
+    playbooks: dict[str, Playbook] = field(default_factory=dict)
 
 
 def ticket_prompt(text: str, triage: Triage, requester_approved: bool) -> str:
@@ -236,7 +267,8 @@ async def investigate(
 ) -> Investigation:
     """INVESTIGATING -> PLAN_PROPOSED with a `plan` event, or -> ESCALATED with the findings so far."""
     store.set_state(run_id, RunState.INVESTIGATING)
-    deps = InvestigateDeps(graph=graph, facts=facts, recorder=Recorder(store, run_id), max_reads=max_reads)
+    deps = InvestigateDeps(graph=graph, facts=facts, recorder=Recorder(store, run_id), max_reads=max_reads,
+                           playbooks=load_playbooks(list(triage.intents), domain))
     instructions = INSTRUCTIONS.format(
         max_reads=max_reads, today=today or date.today(), domain=domain,
         playbooks=prompt_text(list(triage.intents), domain),
@@ -254,7 +286,10 @@ async def investigate(
     except ContentFilterError as exc:
         kind, reason = "refusal", str(exc)
     except UnexpectedModelBehavior as exc:  # e.g. no valid Plan after the output retries
-        kind, reason = "model_error", str(exc)
+        if deps.last_problems:  # the last plan was rejected by the linter, not by the schema
+            kind, reason = "lint", "plan still rejected after retries: " + " ".join(deps.last_problems)
+        else:
+            kind, reason = "model_error", str(exc)
     except ModelAPIError as exc:  # API down or a rejected request: don't leave the run in INVESTIGATING
         kind, reason = "model_api", str(exc)
     else:
@@ -268,9 +303,10 @@ async def investigate(
         if plan.escalate:
             store.set_state(run_id, RunState.ESCALATED, kind="investigator", reason=plan.escalation_reason,
                             findings=deps.recorder.findings)
-            return Investigation("escalated", plan, deps.recorder.findings, plan.escalation_reason)
+            return Investigation("escalated", plan, deps.recorder.findings, plan.escalation_reason,
+                                 deps.transcript, deps.playbooks)
         store.set_state(run_id, RunState.PLAN_PROPOSED)
-        return Investigation("planned", plan, deps.recorder.findings)
+        return Investigation("planned", plan, deps.recorder.findings, None, deps.transcript, deps.playbooks)
 
     store.set_state(run_id, RunState.ESCALATED, kind=kind, reason=reason, findings=deps.recorder.findings)
-    return Investigation("escalated", None, deps.recorder.findings, reason)
+    return Investigation("escalated", None, deps.recorder.findings, reason, deps.transcript, deps.playbooks)

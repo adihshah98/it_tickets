@@ -12,7 +12,7 @@ from pydantic_ai.models.test import TestModel
 from pydantic_ai.usage import UsageLimits
 
 from tech.agents.intake import check_requester, run_intake
-from tech.agents.investigator import READ_TOOLS, build_investigator, investigate
+from tech.agents.investigator import READ_TOOLS, investigate
 from tech.core.models import Triage
 from tech.core.store import RunState, Store
 from tech.execution.catalogue import ACTIONS
@@ -94,14 +94,14 @@ def states(store, run_id) -> list[str]:
 # ------------------------------------------------------------------ investigator
 
 
-async def test_only_read_tools_and_record_finding_are_registered():
+async def test_only_read_tools_and_record_finding_are_registered(store, run_id, graph, facts):
     seen: list[str] = []
 
     def respond(messages, info: AgentInfo) -> ModelResponse:
         seen.extend(t.name for t in info.function_tools)
         return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, PLAN)])
 
-    await build_investigator(FunctionModel(respond)).run("x", deps=None)
+    await run(store, run_id, graph, facts, FunctionModel(respond))
     assert sorted(seen) == sorted([f.__name__ for f in READ_TOOLS] + ["record_finding"])
     assert len(READ_TOOLS) == len(READS)
     write_names = {a.replace(".", "_").lower() for a in ACTIONS} | {"create", "add", "assign", "delete", "update"}
@@ -228,3 +228,50 @@ def test_requester_check(facts):
     assert not check_requester(triage(f"kevin@{DOMAIN}"), facts).approved
     mfa = triage().model_copy(update={"intents": ["mfa.reset"]})
     assert check_requester(mfa, facts).approved  # no approver list for a user's own MFA reset
+
+
+# ------------------------------------------------------------------ linter in the loop
+
+ACCOUNTING = "a55f62f7-a1fe-4314-8d61-88d40f8cfd54"
+INVENTED = "00000000-1111-2222-3333-444444444444"
+
+
+def add_to(group_id: str) -> dict:
+    return {"intent": "user.onboard", "summary": "Add Marcus to a group", "steps": [{
+        "id": "g1", "action": "group.addMember", "params": {"groupId": group_id, "userId": MARCUS},
+        "rationale": "mirror the peer", "expected": {"member": True}, "risk_class": "write.reversible",
+    }]}
+
+
+@respx.mock
+async def test_a_rejected_plan_goes_back_to_the_model_with_the_reasons(store, run_id, graph, facts):
+    respx.get(f"{GRAPH}/users/{MARCUS}/memberOf").mock(return_value=httpx.Response(200, json={"value": [
+        {"@odata.type": "#microsoft.graph.group", "id": ACCOUNTING, "displayName": "Accounting",
+         "groupTypes": ["Unified"], "mailEnabled": True, "securityEnabled": False}]}))
+    respx.get(f"{GRAPH}/users").mock(return_value=httpx.Response(200, json={"value": [{"id": MARCUS}]}))
+    retry_prompts: list[str] = []
+    turns = [
+        [("users_search", {"name": "Marcus"}), ("users_member_of", {"user_id": MARCUS})],
+        [("PLAN", add_to(INVENTED))],
+        [("PLAN", add_to(ACCOUNTING))],
+    ]
+
+    def respond(messages, info: AgentInfo) -> ModelResponse:
+        retry_prompts.extend(str(p.content) for p in messages[-1].parts if p.part_kind == "retry-prompt")
+        output_tool = info.output_tools[0].name
+        return ModelResponse(parts=[ToolCallPart(output_tool if n == "PLAN" else n, a) for n, a in turns.pop(0)])
+
+    result = await run(store, run_id, graph, facts, FunctionModel(respond))
+    assert result.outcome == "planned" and result.plan.steps[0].params.groupId == ACCOUNTING
+    assert len(retry_prompts) == 1 and "Plan rejected" in retry_prompts[0] and INVENTED in retry_prompts[0]
+    lints = [e.payload for e in store.events(run_id) if e.type == "lint_result"]
+    assert [(lr["attempt"], lr["ok"]) for lr in lints] == [(1, False), (2, True)]
+    assert result.transcript.observed(ACCOUNTING) and "user.onboard" in result.playbooks
+
+
+async def test_a_plan_still_rejected_after_the_retries_escalates(store, run_id, graph, facts):
+    result = await run(store, run_id, graph, facts, scripted(*[[("PLAN", add_to(INVENTED))]] * 3))
+    assert result.outcome == "escalated"
+    last = store.events(run_id)[-1].payload
+    assert last["kind"] == "lint" and INVENTED in last["reason"]
+    assert len([e for e in store.events(run_id) if e.type == "lint_result"]) == 3  # first try + 2 retries

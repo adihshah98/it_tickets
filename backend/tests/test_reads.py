@@ -49,13 +49,28 @@ async def test_member_of_trims_classifies_and_records_observed_ids(graph, transc
         {"@odata.type": "#microsoft.graph.group", "id": ACCOUNTING, "displayName": "Accounting",
          "groupTypes": ["Unified"], "mailEnabled": True, "securityEnabled": False, "mail": "acc@x"},
         {"@odata.type": "#microsoft.graph.directoryRole", "id": "99999999-0000-0000-0000-000000000000"},
+        {"@odata.type": "#microsoft.graph.group", "id": TAYLOR, "displayName": "IT Admins", "groupTypes": [],
+         "mailEnabled": False, "securityEnabled": True, "isAssignableToRole": True},
     ))
     groups = await run_read(graph, transcript, "users.memberOf", user_id=MARCUS)
-    assert groups == [{"id": ACCOUNTING, "displayName": "Accounting", "kind": "m365", "mail": "acc@x"}]
+    assert groups[0] == {"id": ACCOUNTING, "displayName": "Accounting", "kind": "m365", "mail": "acc@x",
+                         "roleAssignable": False}
     # IDs are compared lowercase; the directory role was trimmed away, so it was never observed
     assert transcript.observed(ACCOUNTING.lower()) and transcript.observed(ACCOUNTING)
     assert not transcript.observed("99999999-0000-0000-0000-000000000000")
     assert transcript.called("users.memberOf")
+    # what was seen about each group, for the linter and gate
+    assert transcript.object(ACCOUNTING) == {"displayName": "Accounting", "kind": "m365", "roleAssignable": False}
+    assert transcript.object(TAYLOR)["roleAssignable"] is True
+    assert transcript.object("99999999-0000-0000-0000-000000000000") == {}
+
+
+def test_transcript_collects_skus_and_nested_objects(transcript):
+    transcript.record("users.get", {}, {"id": MARCUS, "displayName": "Marcus Webb",
+                                        "manager": {"id": TAYLOR, "displayName": "Taylor Garcia"}})
+    transcript.record("subscribedSkus.list", {}, [{"skuId": SPB, "skuPartNumber": "SPB", "available": 0}])
+    assert transcript.object(TAYLOR) == {"displayName": "Taylor Garcia"}
+    assert transcript.object(SPB) == {"skuPartNumber": "SPB"}
 
 
 @respx.mock

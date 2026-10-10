@@ -3,7 +3,10 @@
     uv run tech run "hey team, we have a new hire..." --from tgarcia@<domain>
     uv run tech run - --from tgarcia < ticket.txt        # ticket from stdin; a bare name gets @<domain>
 
-Prints the run's events as they are appended (the same stream the UI will read), then the plan.
+Triage, investigation (with the linter in the loop), then the gate. Prints the run's events as they
+are appended (the same stream the UI will read), then the plan.
+
+Exit code: 0 awaiting approval (or nothing to approve), 2 escalated, 3 held for an approver.
 """
 
 from __future__ import annotations
@@ -18,16 +21,18 @@ from tech.agents.intake import run_intake
 from tech.agents.investigator import investigate
 from tech.core.config import REPO, Settings
 from tech.core.observability import configure_logfire
-from tech.core.store import Event, Store
+from tech.core.store import Event, RunState, Store
 from tech.graph.client import graph_from_settings
 from tech.playbooks import load_client_facts
+from tech.safety import gate
 
 
 def show(event: Event) -> None:
     p = event.payload
     match event.type:
         case "state":
-            extra = f"  ({p['kind']}: {p['reason']})" if p.get("reason") else ""
+            label = f"{p['kind']}: " if p.get("kind") else ""
+            extra = f"  ({label}{p['reason']})" if p.get("reason") else ""
             print(f"== {p['to']}{extra}", flush=True)
         case "triage":
             t = p["triage"]
@@ -39,6 +44,14 @@ def show(event: Event) -> None:
             print(f"   [{p['t']:5.1f}s] {p['tool']}({args}){status}", flush=True)
         case "finding":
             print(f"   [{p['t']:5.1f}s] * {p['text']}", flush=True)
+        case "lint_result" if p["ok"]:
+            print(f"   [{p['t']:5.1f}s] lint ok (attempt {p['attempt']})", flush=True)
+        case "lint_result":
+            print(f"   [{p['t']:5.1f}s] lint rejected (attempt {p['attempt']}):", flush=True)
+            for problem in p["problems"]:
+                print(f"       - {problem}", flush=True)
+        case "gate_decision":
+            print(f"   {p['step_id']:<24} {p['action']:<18} {p['decision']:<8} {p['rule_id']}", flush=True)
 
 
 async def run(text: str, from_address: str) -> int:
@@ -67,6 +80,10 @@ async def run(text: str, from_address: str) -> int:
         triage, check = await run_intake(store, run_id, text, from_address, facts)
         result = await investigate(store, run_id, text, triage, requester_approved=check.approved,
                                    graph=graph, facts=facts, domain=settings.domain)
+        if result.outcome == "planned":
+            gate.check(store, run_id, result.plan, requester_approved=check.approved, intents=triage.intents,
+                       playbooks=result.playbooks, facts=facts, transcript=result.transcript,
+                       findings=result.findings)
         await asyncio.sleep(0)  # let the printer drain the last events
     finally:
         printing.cancel()
@@ -74,7 +91,8 @@ async def run(text: str, from_address: str) -> int:
 
     if result.plan is not None:
         print(json.dumps(result.plan.model_dump(mode="json", by_alias=True, exclude_defaults=True), indent=2))
-    return 0 if result.outcome == "planned" else 2
+    state = store.get_run(run_id).state
+    return {RunState.ESCALATED: 2, RunState.HELD: 3}.get(state, 0)
 
 
 def main() -> None:
