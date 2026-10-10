@@ -1,0 +1,230 @@
+"""Agent wiring, offline: FunctionModel/TestModel stand in for Claude, respx for Graph."""
+
+from datetime import date
+
+import httpx
+import pytest
+import respx
+from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart, ToolReturnPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.models.test import TestModel
+from pydantic_ai.usage import UsageLimits
+
+from tech.agents.intake import check_requester, run_intake
+from tech.agents.investigator import READ_TOOLS, build_investigator, investigate
+from tech.core.models import Triage
+from tech.core.store import RunState, Store
+from tech.execution.catalogue import ACTIONS
+from tech.graph.client import GRAPH, GraphClient
+from tech.graph.reads import READS
+from tech.playbooks import load_client_facts
+
+DOMAIN = "NorthwindParking.onmicrosoft.com"
+TAYLOR = f"tgarcia@{DOMAIN}"
+MARCUS = "8a590663-09f2-4ee8-ab1a-6195ca3943f9"
+TICKET = "hey team, we have a new hire Priya Nair starting monday in accounting. same setup as Marcus pls"
+PLAN = {"intent": "user.onboard", "summary": "Create Priya like Marcus", "steps": []}
+
+
+async def tokens() -> tuple[str, float]:
+    return "tok", 9e12
+
+
+async def no_sleep(_: float) -> None:
+    pass
+
+
+@pytest.fixture
+def graph():
+    return GraphClient(tokens, sleep=no_sleep)
+
+
+@pytest.fixture
+def store():
+    return Store("sqlite://")
+
+
+@pytest.fixture
+def run_id(store):
+    return store.create_run(store.create_ticket(TICKET, TAYLOR).id).id
+
+
+@pytest.fixture
+def facts():
+    return load_client_facts(DOMAIN)
+
+
+def triage(email: str = TAYLOR) -> Triage:
+    return Triage.model_validate({
+        "intents": ["user.onboard"],
+        "entities": {"new_user": {"display_name": "Priya Nair", "department": "Accounting",
+                                  "start_date": "2026-10-12"}, "peer_user_hint": "Marcus"},
+        "requester": {"name": "Taylor", "email": email},
+    })
+
+
+def scripted(*turns):
+    """A FunctionModel that plays `turns` in order. A turn is a list of (tool, args); "PLAN" means the output tool."""
+    remaining = list(turns)
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        calls = remaining.pop(0)
+        output_tool = info.output_tools[0].name
+        return ModelResponse(parts=[
+            ToolCallPart(output_tool if name == "PLAN" else name, args) for name, args in calls
+        ])
+
+    return FunctionModel(respond)
+
+
+def tool_returns(messages: list[ModelMessage]) -> dict[str, object]:
+    return {p.tool_name: p.content for m in messages for p in getattr(m, "parts", []) if isinstance(p, ToolReturnPart)}
+
+
+async def run(store, run_id, graph, facts, model, **kw):
+    return await investigate(store, run_id, TICKET, triage(), requester_approved=True, graph=graph, facts=facts,
+                             domain=DOMAIN, model=model, today=date(2026, 10, 9), **kw)
+
+
+def states(store, run_id) -> list[str]:
+    return [e.payload["to"] for e in store.events(run_id) if e.type == "state"]
+
+
+# ------------------------------------------------------------------ investigator
+
+
+async def test_only_read_tools_and_record_finding_are_registered():
+    seen: list[str] = []
+
+    def respond(messages, info: AgentInfo) -> ModelResponse:
+        seen.extend(t.name for t in info.function_tools)
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, PLAN)])
+
+    await build_investigator(FunctionModel(respond)).run("x", deps=None)
+    assert sorted(seen) == sorted([f.__name__ for f in READ_TOOLS] + ["record_finding"])
+    assert len(READ_TOOLS) == len(READS)
+    write_names = {a.replace(".", "_").lower() for a in ACTIONS} | {"create", "add", "assign", "delete", "update"}
+    assert not any(w in name.lower() for name in seen for w in write_names)
+
+
+@respx.mock
+async def test_tool_calls_and_findings_are_recorded_and_plan_proposed(store, run_id, graph, facts):
+    respx.get(f"{GRAPH}/users").mock(return_value=httpx.Response(200, json={"value": [
+        {"id": MARCUS, "displayName": "Marcus Lee", "userPrincipalName": f"marcus@{DOMAIN}"}]}))
+    model = scripted(
+        [("users_search", {"name": "Marcus"}), ("record_finding", {"finding": "Marcus is the peer"})],
+        [("PLAN", PLAN)],
+    )
+    result = await run(store, run_id, graph, facts, model)
+
+    assert result.outcome == "planned" and result.plan.summary == PLAN["summary"]
+    assert result.findings == ["Marcus is the peer"]
+    events = {e.type: e.payload for e in store.events(run_id)}
+    assert events["tool_call"]["tool"] == "users.search" and events["tool_call"]["ok"]
+    assert events["tool_call"]["result"][0]["id"] == MARCUS
+    assert events["finding"]["text"] == "Marcus is the peer"
+    assert events["plan"]["plan"]["intent"] == "user.onboard"
+    assert states(store, run_id) == ["RECEIVED", "INVESTIGATING", "PLAN_PROPOSED"]
+    assert store.get_run(run_id).state == RunState.PLAN_PROPOSED
+
+
+@respx.mock
+async def test_graph_errors_go_back_to_the_model_not_up_the_stack(store, run_id, graph, facts):
+    respx.get(f"{GRAPH}/users/{MARCUS}/memberOf").mock(return_value=httpx.Response(
+        404, json={"error": {"code": "Request_ResourceNotFound", "message": "gone"}}))
+    model = scripted([("users_member_of", {"user_id": MARCUS})], [("PLAN", PLAN)])
+    result = await run(store, run_id, graph, facts, model)
+
+    assert result.outcome == "planned"
+    [call] = [e.payload for e in store.events(run_id) if e.type == "tool_call"]
+    assert not call["ok"] and call["error"].startswith("404")
+
+
+@respx.mock
+async def test_read_budget_tells_the_model_to_submit(store, run_id, graph, facts):
+    route = respx.get(f"{GRAPH}/subscribedSkus").mock(return_value=httpx.Response(200, json={"value": []}))
+    returns = {}
+
+    def respond(messages, info: AgentInfo) -> ModelResponse:
+        returns.update(tool_returns(messages))
+        if len(messages) < 4:
+            return ModelResponse(parts=[ToolCallPart("subscribed_skus", {})])
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, PLAN)])
+
+    result = await run(store, run_id, graph, facts, FunctionModel(respond), max_reads=1)
+    assert result.outcome == "planned" and route.call_count == 1
+    assert "read budget of 1 used up" in returns["subscribed_skus"]["error"]
+
+
+async def test_refusal_escalates(store, run_id, graph, facts):
+    def refuse(messages, info) -> ModelResponse:
+        return ModelResponse(parts=[], finish_reason="content_filter", provider_details={"finish_reason": "refusal"})
+
+    result = await run(store, run_id, graph, facts, FunctionModel(refuse))
+    assert result.outcome == "escalated" and result.plan is None
+    last = store.events(run_id)[-1].payload
+    assert last["to"] == "ESCALATED" and last["kind"] == "refusal"
+
+
+async def test_tool_call_limit_escalates_with_the_findings_so_far(store, run_id, graph, facts):
+    def keep_finding(messages, info) -> ModelResponse:
+        return ModelResponse(parts=[ToolCallPart("record_finding", {"finding": f"finding {len(messages)}"})])
+
+    result = await run(store, run_id, graph, facts, FunctionModel(keep_finding),
+                       limits=UsageLimits(tool_calls_limit=2))
+    assert result.outcome == "escalated" and result.findings == ["finding 1", "finding 3"]
+    last = store.events(run_id)[-1].payload
+    assert last["kind"] == "usage_limit" and last["findings"] == result.findings
+    assert store.get_run(run_id).state == RunState.ESCALATED
+
+
+async def test_timeout_escalates(store, run_id, graph, facts):
+    import asyncio
+
+    async def slow(messages, info) -> ModelResponse:
+        await asyncio.sleep(1)
+        return ModelResponse(parts=[TextPart("never")])
+
+    result = await run(store, run_id, graph, facts, FunctionModel(slow), timeout_s=0.05)
+    assert result.outcome == "escalated"
+    assert store.events(run_id)[-1].payload["kind"] == "timeout"
+
+
+async def test_model_api_error_escalates(store, run_id, graph, facts):
+    def broken(messages, info) -> ModelResponse:
+        raise ModelHTTPError(400, "claude-opus-5-5", {"message": "grammar too large"})
+
+    result = await run(store, run_id, graph, facts, FunctionModel(broken))
+    assert result.outcome == "escalated"
+    assert store.events(run_id)[-1].payload["kind"] == "model_api"
+
+
+async def test_investigator_escalation_is_escalated(store, run_id, graph, facts):
+    plan = PLAN | {"escalate": True, "escalation_reason": "Looks like an account takeover"}
+    result = await run(store, run_id, graph, facts, scripted([("PLAN", plan)]))
+    assert result.outcome == "escalated" and result.plan is not None
+    assert states(store, run_id)[-1] == "ESCALATED"
+    assert [e.type for e in store.events(run_id)][-2] == "plan"
+
+
+# ------------------------------------------------------------------ intake
+
+
+async def test_intake_takes_the_requester_from_the_sender_not_the_body(store, run_id, facts):
+    spoofed = triage(email=TAYLOR).model_dump(mode="json")
+    model = TestModel(custom_output_args=spoofed)
+    result, check = await run_intake(store, run_id, TICKET, f"JLee@{DOMAIN}", facts, model=model)
+
+    assert result.requester.email == f"jlee@{DOMAIN}".lower()
+    assert not check.approved and check.scopes == {"user.onboard": False}
+    event = next(e.payload for e in store.events(run_id) if e.type == "triage")
+    assert event["requester_approved"] is False
+    assert store.get_run(run_id).state == RunState.TRIAGED
+
+
+def test_requester_check(facts):
+    assert check_requester(triage(TAYLOR), facts).approved
+    assert not check_requester(triage(f"kevin@{DOMAIN}"), facts).approved
+    mfa = triage().model_copy(update={"intents": ["mfa.reset"]})
+    assert check_requester(mfa, facts).approved  # no approver list for a user's own MFA reset
