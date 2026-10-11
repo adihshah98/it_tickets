@@ -22,6 +22,22 @@ TICKET = ("hey team, we have a new hire Priya Nair starting monday in accounting
           "she'll need office + teams. thx")
 
 
+def _diagnosis(store, run_id) -> str:
+    """Why a run did not reach DONE: the last state change, failed steps, DoD checks, blocks and errors.
+
+    Event payloads never hold a TAP or link token, and a block event holds hit kinds only, so this is safe to print.
+    """
+    ev = store.events(run_id)
+    last_state = next((e.payload for e in reversed(ev) if e.type == "state"), None)
+    lines = [f"last state event: {last_state}"]
+    for e in ev:
+        if e.type in ("step_failed", "done_check", "error"):
+            lines.append(f"{e.type}: {e.payload}")
+        elif e.type == "message_blocked":
+            lines.append(f"message_blocked: {e.payload}")
+    return "\n".join(lines)
+
+
 async def test_priya_onboarding_end_to_end():
     settings = Settings.load()
     if settings.anthropic_api_key:
@@ -36,7 +52,8 @@ async def test_priya_onboarding_end_to_end():
         decisions = {e.payload["action"]: e.payload["decision"] for e in store.events_of(run_id, "gate_decision")}
         assert decisions["license.purchase"] == decisions["tap.create"] == "approve"
 
-        assert await runner.approve(rt, run_id, by=taylor, answers={"upn_format": "priya.nair"}) == RunState.DONE
+        final = await runner.approve(rt, run_id, by=taylor, answers={"upn_format": "priya.nair"})
+        assert final == RunState.DONE, _diagnosis(store, run_id)
 
         checks = [e.payload for e in store.events_of(run_id, "done_check")]
         assert checks and all(c["ok"] for c in checks), checks
