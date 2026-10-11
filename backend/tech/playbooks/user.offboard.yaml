@@ -1,0 +1,36 @@
+# Tech.MD §6.2. {domain} is replaced with the tenant's domain when loaded.
+intent: user.offboard
+goal: Leaver loses access immediately; their mail, files and owned resources are handed over as the client wants; nothing irreversible without explicit confirmation.
+must_investigate:
+  - users.get(leaver)            # incl. signInActivity: never signed in -> recommend license cancel
+  - users.memberOf(leaver)       # groups to remove; classify DL / mail-enabled security -> needs_technician
+  - users.ownedObjects(leaver)   # groups/apps they own -> ownership transfer question
+  - users.licenseDetails(leaver) # keep the license by default; a 30-day review is scheduled
+  - mailboxSettings.get(leaver)  # current auto-reply state
+  - messageRules.list(leaver)    # existing forwards (an external forward is possible exfiltration)
+questions_to_resolve:           # ask up front; don't act then ask
+  - mailbox_disposition         # forward to / delegate to / keep / delete
+  - device_disposition          # reuse / wipe / return
+  - owned_resources_new_owner
+  - effective_time              # "EOD today" -> schedule the block
+definition_of_done:
+  - account_disabled: {user: "$leaver"}
+  - sessions_revoked: {user: "$leaver"}
+  - auto_reply_set: {user: "$leaver"}                             # if requested
+  - forward_rule_active: {user: "$leaver", to: "$forward_to"}     # if requested; internal only
+  - removed_from_groups: {user: "$leaver", groups: "$plan.removable_groups"}
+  - ownership_transferred: {objects: "$leaver.ownedObjects", to: "$new_owner"}
+  - followup_scheduled: {type: license_review, in_days: 30}
+  - needs_technician_listed: {for: [delegate_access, convert_to_shared, "$leaver.non_graph_access", device_disposition]}
+allowed_actions: [user.update, sessions.revoke, mailbox.autoReply, mailbox.forwardRule,
+                  group.removeMember, group.addOwner, followup.schedule, link.sendOneTime]
+gotchas:
+  - Removing the license makes the mailbox inaccessible (Ruben). Default; keep the license and schedule a 30-day review.
+  - Deleted users restore within 30 days, but calendar items are lost immediately.
+  - Delegate (FullAccess) and convert-to-shared need Exchange PowerShell -> needs_technician.
+  - VPN (Meraki), hosted desktop and on-prem AD accounts live outside Graph -> needs_technician.
+  - An existing external forwarding rule on a leaver is a red flag -> surface it, don't silently keep it.
+never:
+  - Delete the user or mailbox in this playbook.
+  - Remove licenses without explicit confirmation of the mailbox consequence.
+  - Forward to an external address.

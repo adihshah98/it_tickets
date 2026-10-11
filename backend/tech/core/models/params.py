@@ -92,6 +92,51 @@ class FollowupParams(Params):
         return self
 
 
+# ------------------------------------------------------------------ offboarding actions (Tech.MD §6.2, §7)
+
+
+class SessionsRevokeParams(Params):
+    userId: ObjectIdOrRef = alias("userId", "user_id")
+
+
+class MailboxAutoReplyParams(Params):
+    userId: ObjectIdOrRef = alias("userId", "user_id")
+    message: str = Field(description="The reply sent to external senders; shown internally too unless overridden")
+    internalMessage: str | None = alias("internalMessage", "internal_message", default=None,
+                                        description="A different reply for senders inside the org")
+    scheduledEndDateTime: datetime | None = alias("scheduledEndDateTime", "scheduled_end_date_time", default=None,
+                                                  description="When the auto-reply stops; omit to leave it on")
+
+
+class MailboxForwardRuleParams(Params):
+    userId: ObjectIdOrRef = alias("userId", "user_id")
+    forwardTo: str = alias("forwardTo", "forward_to", pattern=r"^[^@\s]+@[^@\s]+$",
+                           description="An internal recipient; external forwarding is forbidden")
+    ruleName: str = alias("ruleName", "rule_name", default="Forward (offboarding)")
+
+    @model_validator(mode="after")
+    def internal_only(self) -> MailboxForwardRuleParams:
+        # The domain is unknown here, so the handler enforces internal-only against the tenant domain;
+        # this is a cheap first guard against obvious free-mail addresses in a plan.
+        if self.forwardTo.split("@")[-1].lower() in {"gmail.com", "outlook.com", "hotmail.com", "yahoo.com"}:
+            raise ValueError("forwardTo must be an internal address; external forwarding is forbidden")
+        return self
+
+
+class GroupRemoveMemberParams(Params):
+    groupId: ObjectId = alias("groupId", "group_id")
+    userId: ObjectIdOrRef = alias("userId", "user_id")
+    groupName: str | None = alias("groupName", "group_name", default=None,
+                                  description="Display name, for the approval card only")
+
+
+class GroupAddOwnerParams(Params):
+    groupId: ObjectId = alias("groupId", "group_id")
+    userId: ObjectIdOrRef = alias("userId", "user_id")
+    groupName: str | None = alias("groupName", "group_name", default=None,
+                                  description="Display name, for the approval card only")
+
+
 LinkContent = Literal["email_access_steps", "outlook_mobile_app_tip", "file_share_note"]
 
 

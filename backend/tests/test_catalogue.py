@@ -19,8 +19,10 @@ def test_every_allowed_action_is_in_the_catalogue(intent):
     assert set(playbook.allowed_actions) <= set(ACTIONS)
 
 
-def test_every_onboarding_action_is_covered():
-    assert set(load_playbook("user.onboard", "example.com").allowed_actions) == set(ACTIONS)
+def test_every_catalogue_action_is_used_by_some_playbook():
+    """No dead actions: every catalogue action appears in at least one playbook's allowed_actions."""
+    used = {a for i in intents() for a in load_playbook(i, "example.com").allowed_actions}
+    assert set(ACTIONS) == used, f"unused: {set(ACTIONS) - used}"
 
 
 def test_every_action_has_a_verify_read_and_compensation():

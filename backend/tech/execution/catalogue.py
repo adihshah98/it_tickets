@@ -3,7 +3,7 @@
 The gate takes risk classes from here, never from the plan (the plan's risk_class is only compared, for
 the audit log). Each action's `handler` does the work (graph/writes.py, mocks.py, links.py, scheduler.py);
 `verify` and `compensate` describe it for people, and `compensate` is what an escalation offers to roll back.
-Only the onboarding actions are here; offboarding and MFA actions arrive in Week 3.
+Onboarding and offboarding actions are here; the MFA actions arrive in Week 3 Day 13.
 """
 
 from __future__ import annotations
@@ -14,11 +14,16 @@ from dataclasses import dataclass, field
 from tech.core.models import (
     FollowupParams,
     GroupAddMemberParams,
+    GroupAddOwnerParams,
+    GroupRemoveMemberParams,
     LicenseAssignParams,
     LicensePurchaseParams,
     LinkSendParams,
+    MailboxAutoReplyParams,
+    MailboxForwardRuleParams,
     Params,
     RiskClass,
+    SessionsRevokeParams,
     TapCreateParams,
     UserCreateParams,
     UserUpdateParams,
@@ -107,5 +112,35 @@ ACTIONS: dict[str, ActionSpec] = {spec.name: spec for spec in [
         "followup.schedule", FollowupParams, "none",
         "service: scheduler", "followup record exists with runAt",
         "cancel the follow-up", risk_for=_followup_risk, handler=FollowupSchedule(),
+    ),
+    # Offboarding (Tech.MD §6.2, §7)
+    ActionSpec(
+        "sessions.revoke", SessionsRevokeParams, "access.revoke",
+        "POST /users/{userId}/revokeSignInSessions",
+        "GET /users/{userId}: signInSessionsValidFromDateTime moved forward",
+        "nothing to undo: revoking sessions only ends current tokens; the user can sign in again normally",
+        handler=HANDLERS["sessions.revoke"],
+    ),
+    ActionSpec(
+        "mailbox.autoReply", MailboxAutoReplyParams, "write.reversible",
+        "PATCH /users/{userId}/mailboxSettings (automaticRepliesSetting)",
+        "GET /users/{userId}/mailboxSettings: auto-reply on with the message",
+        "PATCH mailboxSettings back to the snapshot (auto-reply off)", handler=HANDLERS["mailbox.autoReply"],
+    ),
+    ActionSpec(
+        "mailbox.forwardRule", MailboxForwardRuleParams, "data.access",
+        "POST /users/{userId}/mailFolders/inbox/messageRules (forwardTo, internal only)",
+        "GET messageRules: a rule forwards to forwardTo",
+        "DELETE the inbox rule", handler=HANDLERS["mailbox.forwardRule"],
+    ),
+    ActionSpec(
+        "group.removeMember", GroupRemoveMemberParams, "write.reversible",
+        "DELETE /groups/{groupId}/members/{userId}/$ref", "GET /users/{userId}/memberOf: no longer contains groupId",
+        "POST /groups/{groupId}/members/$ref to re-add", handler=HANDLERS["group.removeMember"],
+    ),
+    ActionSpec(
+        "group.addOwner", GroupAddOwnerParams, "data.access",
+        "POST /groups/{groupId}/owners/$ref", "GET /groups/{groupId}/owners: contains userId",
+        "DELETE /groups/{groupId}/owners/{userId}/$ref", handler=HANDLERS["group.addOwner"],
     ),
 ]}

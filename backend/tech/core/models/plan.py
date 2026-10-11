@@ -14,9 +14,14 @@ from tech.core.models.base import Intent, RiskClass
 from tech.core.models.params import (
     FollowupParams,
     GroupAddMemberParams,
+    GroupAddOwnerParams,
+    GroupRemoveMemberParams,
     LicenseAssignParams,
     LicensePurchaseParams,
     LinkSendParams,
+    MailboxAutoReplyParams,
+    MailboxForwardRuleParams,
+    SessionsRevokeParams,
     TapCreateParams,
     UserCreateParams,
     UserUpdateParams,
@@ -71,15 +76,42 @@ class LinkSendStep(StepBase):
     params: LinkSendParams
 
 
+class SessionsRevokeStep(StepBase):
+    action: Literal["sessions.revoke"]
+    params: SessionsRevokeParams
+
+
+class MailboxAutoReplyStep(StepBase):
+    action: Literal["mailbox.autoReply"]
+    params: MailboxAutoReplyParams
+
+
+class MailboxForwardRuleStep(StepBase):
+    action: Literal["mailbox.forwardRule"]
+    params: MailboxForwardRuleParams
+
+
+class GroupRemoveMemberStep(StepBase):
+    action: Literal["group.removeMember"]
+    params: GroupRemoveMemberParams
+
+
+class GroupAddOwnerStep(StepBase):
+    action: Literal["group.addOwner"]
+    params: GroupAddOwnerParams
+
+
 Step = Annotated[
     UserCreateStep | UserUpdateStep | LicensePurchaseStep | LicenseAssignStep | GroupAddMemberStep
-    | TapCreateStep | FollowupStep | LinkSendStep,
+    | TapCreateStep | FollowupStep | LinkSendStep | SessionsRevokeStep | MailboxAutoReplyStep
+    | MailboxForwardRuleStep | GroupRemoveMemberStep | GroupAddOwnerStep,
     Field(discriminator="action"),
 ]
 STEP_TYPES: dict[str, type[StepBase]] = {
     t.model_fields["action"].annotation.__args__[0]: t  # type: ignore[union-attr]
     for t in (UserCreateStep, UserUpdateStep, LicensePurchaseStep, LicenseAssignStep, GroupAddMemberStep,
-              TapCreateStep, FollowupStep, LinkSendStep)
+              TapCreateStep, FollowupStep, LinkSendStep, SessionsRevokeStep, MailboxAutoReplyStep,
+              MailboxForwardRuleStep, GroupRemoveMemberStep, GroupAddOwnerStep)
 }
 
 

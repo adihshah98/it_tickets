@@ -293,10 +293,164 @@ class TapCreate(Handler):
         return True, {"exists": True, "usability": tap.get("methodUsabilityReason")}
 
 
+# ------------------------------------------------------------------ offboarding (Tech.MD §6.2, §7)
+
+
+async def group_owner_ids(graph: GraphClient, group_id: str) -> set[str]:
+    return {o["id"].lower() async for o in graph.list(f"/groups/{group_id}/owners", {"$select": "id"},
+                                                       retry_replication=True)}
+
+
+class SessionsRevoke(Handler):
+    """revokeSignInSessions invalidates refresh tokens; verify that signInSessionsValidFromDateTime moved up."""
+
+    async def snapshot(self, ctx, p):
+        user = await ctx.graph.get(f"/users/{p['userId']}", params={"$select": "id,signInSessionsValidFromDateTime"})
+        return {"signInSessionsValidFromDateTime": user.get("signInSessionsValidFromDateTime")}
+
+    async def act(self, ctx, p):
+        before = (await self.snapshot(ctx, p))["signInSessionsValidFromDateTime"]
+        await ctx.graph.post(f"/users/{p['userId']}/revokeSignInSessions", {}, retry_replication=True)
+        return {"id": p["userId"], "revokedAfter": before}
+
+    async def verify(self, ctx, p, output):
+        user = await ctx.graph.get(f"/users/{p['userId']}", params={"$select": "id,signInSessionsValidFromDateTime"},
+                                   retry_replication=True)
+        now = user.get("signInSessionsValidFromDateTime")
+        before = output.get("revokedAfter")
+        moved = now is not None and (before is None or now > before)
+        return moved, {"signInSessionsValidFromDateTime": now}
+
+
+class MailboxAutoReply(Handler):
+    """PATCH mailboxSettings.automaticRepliesSetting. Reversible: snapshot restores the prior setting."""
+
+    async def _settings(self, ctx, p):
+        return await ctx.graph.get(f"/users/{p['userId']}/mailboxSettings", retry_replication=True)
+
+    def _desired(self, p):
+        reply = {
+            "status": "scheduled" if p.get("scheduledEndDateTime") else "alwaysEnabled",
+            "externalReplyMessage": p["message"],
+            "internalReplyMessage": p.get("internalMessage") or p["message"],
+            "externalAudience": "all",
+        }
+        if p.get("scheduledEndDateTime"):
+            reply["scheduledEndDateTime"] = {"dateTime": p["scheduledEndDateTime"], "timeZone": "UTC"}
+        return reply
+
+    async def existing(self, ctx, p):
+        auto = (await self._settings(ctx, p)).get("automaticRepliesSetting") or {}
+        if auto.get("status") in {"scheduled", "alwaysEnabled"} and \
+                same(auto.get("externalReplyMessage"), p["message"]):
+            return {"id": p["userId"]}
+        return None
+
+    async def snapshot(self, ctx, p):
+        return {"automaticRepliesSetting": (await self._settings(ctx, p)).get("automaticRepliesSetting")}
+
+    async def act(self, ctx, p):
+        await ctx.graph.patch(f"/users/{p['userId']}/mailboxSettings",
+                              {"automaticRepliesSetting": self._desired(p)}, retry_replication=True)
+        return {"id": p["userId"]}
+
+    async def verify(self, ctx, p, output):
+        auto = (await self._settings(ctx, p)).get("automaticRepliesSetting") or {}
+        on = auto.get("status") in {"scheduled", "alwaysEnabled"}
+        return on and same(auto.get("externalReplyMessage"), p["message"]), {"status": auto.get("status")}
+
+
+class MailboxForwardRule(Handler):
+    """POST an inbox rule that forwards to an internal recipient. External forwarding is blocked in code."""
+
+    def _path(self, p):
+        return f"/users/{p['userId']}/mailFolders/inbox/messageRules"
+
+    async def existing(self, ctx, p):
+        async for rule in ctx.graph.list(self._path(p), retry_replication=True):
+            if same(rule.get("displayName"), p["ruleName"]):
+                return {"id": rule["id"], "userId": p["userId"]}
+        return None
+
+    async def snapshot(self, ctx, p):
+        return {"ruleName": p["ruleName"]}
+
+    async def act(self, ctx, p):
+        domain = ctx.domain.lower()
+        if p["forwardTo"].split("@")[-1].lower() != domain:
+            raise Deviation(f"forwardTo {p['forwardTo']} is outside {domain}; external forwarding is forbidden")
+        body = {"displayName": p["ruleName"], "sequence": 1, "isEnabled": True,
+                "actions": {"forwardTo": [{"emailAddress": {"address": p["forwardTo"]}}], "stopProcessingRules": False}}
+        rule = await ctx.graph.post(self._path(p), body, retry_replication=True)
+        return {"id": rule["id"], "userId": p["userId"]}
+
+    async def verify(self, ctx, p, output):
+        async for rule in ctx.graph.list(self._path(p), retry_replication=True):
+            if rule["id"] == output["id"]:
+                to = [a["emailAddress"]["address"] async for a in _forward_targets(rule)]
+                return bool(to), {"forwardTo": to}
+        return False, {"exists": False}
+
+
+async def _forward_targets(rule):
+    for target in (rule.get("actions") or {}).get("forwardTo") or []:
+        yield target
+
+
+class GroupRemoveMember(Handler):
+    async def existing(self, ctx, p):
+        if p["groupId"].lower() not in await member_group_ids(ctx.graph, p["userId"]):
+            return {"groupId": p["groupId"], "userId": p["userId"]}  # already not a member
+        return None
+
+    async def snapshot(self, ctx, p):
+        return {"isMember": True}
+
+    async def act(self, ctx, p):
+        try:
+            await ctx.graph.delete(f"/groups/{p['groupId']}/members/{p['userId']}/$ref", retry_replication=True)
+        except GraphError as exc:
+            if not (exc.status == 404 or "does not exist" in exc.message.lower()):
+                raise
+        return {"groupId": p["groupId"], "userId": p["userId"]}
+
+    async def verify(self, ctx, p, output):
+        gone = p["groupId"].lower() not in await member_group_ids(ctx.graph, p["userId"])
+        return gone, {"isMember": not gone, "groupId": p["groupId"]}
+
+
+class GroupAddOwner(Handler):
+    async def existing(self, ctx, p):
+        if p["groupId"].lower() and p["userId"].lower() in await group_owner_ids(ctx.graph, p["groupId"]):
+            return {"groupId": p["groupId"], "userId": p["userId"]}
+        return None
+
+    async def snapshot(self, ctx, p):
+        return {"isOwner": False}
+
+    async def act(self, ctx, p):
+        body = {"@odata.id": f"{GRAPH}/users/{p['userId']}"}
+        try:
+            await ctx.graph.post(f"/groups/{p['groupId']}/owners/$ref", body, retry_replication=True)
+        except GraphError as exc:
+            if not (exc.status == 400 and "already exist" in exc.message.lower()):
+                raise
+        return {"groupId": p["groupId"], "userId": p["userId"]}
+
+    async def verify(self, ctx, p, output):
+        owner = p["userId"].lower() in await group_owner_ids(ctx.graph, p["groupId"])
+        return owner, {"isOwner": owner, "groupId": p["groupId"]}
+
+
 HANDLERS: dict[str, Handler] = {
     "user.create": UserCreate(),
     "user.update": UserUpdate(),
     "license.assign": LicenseAssign(),
     "group.addMember": GroupAddMember(),
     "tap.create": TapCreate(),
+    "sessions.revoke": SessionsRevoke(),
+    "mailbox.autoReply": MailboxAutoReply(),
+    "mailbox.forwardRule": MailboxForwardRule(),
+    "group.removeMember": GroupRemoveMember(),
+    "group.addOwner": GroupAddOwner(),
 }

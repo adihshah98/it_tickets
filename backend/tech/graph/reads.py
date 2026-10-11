@@ -179,6 +179,36 @@ async def auth_methods(graph: GraphClient, user_id: str) -> list[dict]:
             async for m in graph.list(f"/users/{user_id}/authentication/methods")]
 
 
+async def mailbox_settings(graph: GraphClient, user_id: str) -> dict:
+    """A user's mailbox settings: whether an auto-reply is on, and its messages (for offboarding)."""
+    try:
+        settings = await graph.get(f"/users/{user_id}/mailboxSettings")
+    except GraphError as exc:
+        if exc.status == 404:  # no Exchange mailbox (e.g. an unlicensed or P1-only user)
+            return {"mailbox": False}
+        raise
+    auto = settings.get("automaticRepliesSetting") or {}
+    return {"mailbox": True, "autoReplyStatus": auto.get("status"),
+            "externalReplyMessage": auto.get("externalReplyMessage")}
+
+
+async def message_rules(graph: GraphClient, user_id: str) -> list[dict]:
+    """A user's inbox rules, with their forwarding targets (an existing external forward is a red flag)."""
+    rules = []
+    try:
+        async for rule in graph.list(f"/users/{user_id}/mailFolders/inbox/messageRules"):
+            actions = rule.get("actions") or {}
+            forwards = [t.get("emailAddress", {}).get("address")
+                        for t in (actions.get("forwardTo") or []) + (actions.get("redirectTo") or [])]
+            rules.append({"id": rule["id"], "displayName": rule.get("displayName"),
+                          "enabled": rule.get("isEnabled"), "forwardsTo": [f for f in forwards if f]})
+    except GraphError as exc:
+        if exc.status == 404:
+            return []
+        raise
+    return rules
+
+
 async def files_search(graph: GraphClient, query: str) -> list[dict]:
     """Search the document libraries of every Microsoft 365 group (team sites) for files."""
     groups = [g async for g in graph.list("/groups", {"$filter": "groupTypes/any(c:c eq 'Unified')",
@@ -221,6 +251,8 @@ READS: dict[str, ReadFn] = {
     "subscribedSkus.list": subscribed_skus,
     "signIns.list": sign_ins,
     "authMethods.list": auth_methods,
+    "mailboxSettings.get": mailbox_settings,
+    "messageRules.list": message_rules,
     "files.search": files_search,
     "files.versions": file_versions,
 }

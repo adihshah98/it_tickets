@@ -187,6 +187,16 @@ async def auth_methods(ctx: RunContext[InvestigateDeps], user_id: str) -> list[d
     return await _read(ctx, "authMethods.list", user_id=user_id)
 
 
+async def mailbox_settings(ctx: RunContext[InvestigateDeps], user_id: str) -> dict:
+    """A user's mailbox settings: whether an auto-reply is on, and its messages (offboarding)."""
+    return await _read(ctx, "mailboxSettings.get", user_id=user_id)
+
+
+async def message_rules(ctx: RunContext[InvestigateDeps], user_id: str) -> list[dict]:
+    """A user's inbox rules and their forwarding targets (an external forward is a red flag)."""
+    return await _read(ctx, "messageRules.list", user_id=user_id)
+
+
 async def files_search(ctx: RunContext[InvestigateDeps], query: str) -> list[dict]:
     """Search the document libraries of every Microsoft 365 group (team sites) for files."""
     return await _read(ctx, "files.search", query=query)
@@ -204,7 +214,7 @@ async def record_finding(ctx: RunContext[InvestigateDeps], finding: str) -> str:
 
 
 READ_TOOLS = [users_search, users_list, users_get, users_member_of, users_owned_objects, users_license_details,
-              subscribed_skus, sign_ins, auth_methods, files_search, file_versions]
+              subscribed_skus, sign_ins, auth_methods, mailbox_settings, message_rules, files_search, file_versions]
 TOOLS = [*READ_TOOLS, record_finding]
 
 
