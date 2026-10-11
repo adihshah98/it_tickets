@@ -99,6 +99,52 @@ def test_more_than_forty_writes_are_blocked(transcript, playbooks, facts):
     assert {d.rule_id for d in result.decisions} == {"bounds.writes_per_run"}
 
 
+# ------------------------------------------------------------------ autonomy (A1/A2/A3)
+
+
+def at_level(facts, level: str, intent: str = "user.onboard"):
+    return facts.model_copy(update={"autonomy": {**facts.autonomy, intent: level}})
+
+
+def test_a2_is_a_no_op_identical_to_before_autonomy(transcript, playbooks, facts):
+    # The demo intents are all A2; the gate's decisions must be exactly the risk-class ones.
+    before = decisions(evaluate(plan_with(), transcript, playbooks, facts))
+    assert before == {
+        "create_user": ("auto", "risk.write.reversible"),
+        "buy_seat": ("approve", "risk.spend"),
+        "add_accounting": ("auto", "risk.write.reversible"),
+        "add_finance_files": ("auto", "risk.write.reversible"),
+        "assign_license_monday": ("auto", "risk.write.reversible"),
+        "tap": ("approve", "risk.security.credential"),
+        "send_link": ("auto", "risk.none"),
+    }
+
+
+def test_a1_blocks_every_write_as_a_technician_checklist(transcript, playbooks, facts):
+    result = evaluate(plan_with(), transcript, playbooks, at_level(facts, "A1"))
+    assert all(d.decision == "block" and d.rule_id == "autonomy.a1" for d in result.decisions)
+
+
+def test_a3_auto_approves_a_reversible_step_but_not_a_credential_one(transcript, playbooks, facts):
+    result = decisions(evaluate(plan_with(), transcript, playbooks, at_level(facts, "A3")))
+    assert result["create_user"] == ("auto", "autonomy.a3.write.reversible")
+    assert result["tap"] == ("approve", "risk.security.credential")  # A3 never waives security.credential
+    assert result["buy_seat"] == ("approve", "risk.spend")           # ...or spend
+
+
+def test_a3_auto_approves_an_offboard_revoke_outside_an_approved_requester(transcript, facts):
+    from tech.playbooks import load_playbook  # noqa: PLC0415 - offboarding has no playbook file yet
+
+    block = step("block", "user.update", {"userId": ACCOUNTING, "accountEnabled": False}, "access.revoke")
+    plan = Plan.model_validate({"intent": "user.offboard", "summary": "x", "steps": [block]})
+    playbooks = {"user.offboard": load_playbook("user.onboard", "x").model_copy(
+        update={"intent": "user.offboard", "allowed_actions": ["user.update"]})}
+    # A3 autos the revoke even for an unapproved requester; at A2 that same case needs approval.
+    a3 = evaluate(plan, transcript, playbooks, at_level(facts, "A3", "user.offboard"),
+                  intents=("user.offboard",), approved=False)
+    assert decisions(a3)["block"] == ("auto", "autonomy.a3.access.revoke")
+
+
 # ------------------------------------------------------------------ check: events and run state
 
 

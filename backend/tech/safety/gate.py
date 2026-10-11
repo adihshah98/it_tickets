@@ -1,9 +1,11 @@
 """Policy gate (Tech.MD §8): a decision per step, auto | approve | block, plus a run-level hold.
 
 Plain code, evaluated after the linter. Risk classes come from the catalogue, never from the plan.
-Rule order: requester hold, then never/catalogue blocks, then risk-class rules, then the blast-radius
-guard. The first rule that blocks wins; otherwise the strictest decision wins. Autonomy levels and
-the no-playbook rules arrive in Weeks 3-4.
+Rule order: requester hold, then never/catalogue blocks, then the autonomy level, then risk-class
+rules, then the blast-radius guard. The first rule that blocks wins; otherwise the strictest decision
+wins. Autonomy is per intent per client (§8): A1 blocks every write (a technician checklist), A2 leaves
+the risk-class rules in force, and A3 auto-approves reversible/revoke writes but never spend,
+data.access or security.credential. The no-playbook rules arrive in Week 4.
 
 `evaluate` is pure. `check` records its result on a run: a gate_decision event per step, then the
 next state. The Day 5 runner calls `check` too.
@@ -61,7 +63,20 @@ class _Verdicts:
         return max(self.items, key=lambda item: STRICTNESS[item[0]])  # max keeps the first of equals
 
 
-def _risk_rule(risk: RiskClass, intents: Sequence[str], requester_approved: bool) -> tuple[str, str, str]:
+A3_WAIVES: set[RiskClass] = {"write.reversible", "access.revoke"}  # the only classes A3 auto-approves (§8)
+
+
+def autonomy_level(intents: Sequence[str], facts: ClientFacts) -> str:
+    """The strictest autonomy level (A1 < A2 < A3) across the step's governing intents; A2 if unset."""
+    levels = [facts.autonomy.get(i, "A2") for i in intents] or ["A2"]
+    return min(levels)  # "A1" < "A2" < "A3" as strings, and A1 is the strictest
+
+
+def _risk_rule(risk: RiskClass, intents: Sequence[str], requester_approved: bool,
+               autonomy: str = "A2") -> tuple[str, str, str]:
+    # A3 waives approval for reversible/revoke writes, but never for the classes a person must see (§8).
+    if autonomy == "A3" and risk in A3_WAIVES:
+        return "auto", f"autonomy.a3.{risk}", f"A3: {risk} runs automatically for this client"
     rule = f"risk.{risk}"
     if risk in APPROVE_CLASSES:
         return "approve", rule, f"{risk} always needs a person's approval"
@@ -86,9 +101,13 @@ def _step(step: StepBase, *, intents: Sequence[str], requester_approved: bool, a
     if step.action not in allowed:
         verdicts.add("block", "playbook.not_allowed", f"{step.action} is not in the playbook's allowed_actions")
 
+    autonomy = autonomy_level(intents, facts)
+    if autonomy == "A1":  # the client runs this intent as a technician checklist; the agent writes nothing
+        verdicts.add("block", "autonomy.a1", "this client reviews every step for this request (autonomy A1)")
+
     typed = step.params if hasattr(step.params, "model_dump") else spec.params.model_validate(params)
     risk = spec.risk(typed)
-    decision, rule, reason = _risk_rule(risk, intents, requester_approved)
+    decision, rule, reason = _risk_rule(risk, intents, requester_approved, autonomy)
     if step.risk_class != risk:
         reason += f" (the plan said {step.risk_class}; the catalogue says {risk})"
     verdicts.add(decision, rule, reason)
