@@ -4,6 +4,7 @@ Run after `uv run tenant/reset.py`, with `uv run pytest -m live -k onboard`. Cos
 Opus run (about 0.2-0.4 USD) and writes to the demo tenant; reset again afterwards.
 """
 
+import asyncio
 import os
 
 import pytest
@@ -64,8 +65,12 @@ async def test_priya_onboarding_end_to_end():
         g = rt.graph
         priya = await g.get(f"/users/priya.nair@{settings.domain}", params={"$select": "id,usageLocation"})
         assert priya["usageLocation"] == "US"
-        names = {grp["displayName"] async for grp in g.list(f"/users/{priya['id']}/memberOf",
-                                                            {"$select": "displayName"})}
+        for _ in range(10):  # memberOf is eventually consistent: a just-added group can lag a few seconds
+            names = {grp["displayName"] async for grp in g.list(f"/users/{priya['id']}/memberOf",
+                                                                {"$select": "displayName"})}
+            if {"Accounting", "Finance Files"} <= names:
+                break
+            await asyncio.sleep(3)
         assert {"Accounting", "Finance Files"} <= names
         assert not names & {"RDS-Users", "VPN-Users", "Northwind Parking"}
         assert await member_group_ids(g, priya["id"])
