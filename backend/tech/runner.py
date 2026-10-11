@@ -6,6 +6,8 @@
               The API calls the two halves itself: `accept` inline (errors go back to the caller), then
               `execute` as a background task.
     resume    carries on an execution a crashed process left in EXECUTING.
+    close-out runs once the steps verify (CLOSING): DoD probes, reply and PSA note, time entry; a failed
+              DoD escalates.
 
 Each call can run in a new process (the CLI): what a run needs is rebuilt from its events: the plan
 from `plan`, the intents from `triage`, the approver's answers from `approval`, finished steps and
@@ -23,6 +25,8 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from tech import closeout
+from tech.agents.closeout import MODEL as CLOSEOUT_MODEL
 from tech.agents.intake import MODEL as INTAKE_MODEL
 from tech.agents.intake import run_intake
 from tech.agents.investigator import MODEL as INVESTIGATOR_MODEL
@@ -74,6 +78,7 @@ class Runtime:
     domain: str
     link_key: str | None = None
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+    closeout_model: Any = CLOSEOUT_MODEL
 
     @classmethod
     def from_settings(cls, settings: Settings, *, environment: str) -> Runtime:
@@ -252,8 +257,15 @@ async def execute(rt: Runtime, run_id: int, plan: Plan) -> None:
                    findings=findings(rt.store, run_id))
         return
     if result.ok:
-        transition(rt.store, run_id, S.CLOSING)  # close-out (DoD probes, reply, PSA note) arrives on Day 8
-        transition(rt.store, run_id, S.DONE)
+        transition(rt.store, run_id, S.CLOSING)
+        failed = await closeout.close_out(rt.store, rt.graph, run_id, plan, facts=rt.facts, domain=rt.domain,
+                                          secrets=execution.secrets, model=rt.closeout_model)
+        if failed:
+            transition(rt.store, run_id, S.ESCALATED, kind="dod",
+                       reason=f"definition of done not met: {', '.join(failed)}", failed_probes=failed,
+                       findings=findings(rt.store, run_id))
+        else:
+            transition(rt.store, run_id, S.DONE)
         return
     done = [e.payload for e in rt.store.events_of(run_id, "step_verified")]
     by_id = {s.id: s for s in plan.steps}

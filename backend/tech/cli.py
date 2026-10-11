@@ -65,6 +65,17 @@ def show(event: Event) -> None:
             print(f"   [{p['t']:5.1f}s] ok {p['step_id']:<24} {p['action']}{skipped}", flush=True)
         case "step_failed":
             print(f"   [{p['t']:5.1f}s] FAILED {p['step_id']:<20} {p['action']}  {p['error']}", flush=True)
+        case "done_check":
+            mark = "ok" if p["ok"] else "FAILED"
+            print(f"   dod {mark} {p['probe']}: {p['detail']}", flush=True)
+        case "message_sent":
+            print(f"   sent {p['kind']}{' to ' + p['to'] if p.get('to') else ''}: {p.get('subject') or ''}", flush=True)
+            print("     " + p["text"].replace("\n", "\n     "), flush=True)
+        case "message_blocked":
+            why = ", ".join(h["kind"] for h in p["hits"]) or p.get("detail", "")
+            print(f"   blocked {p['kind']} ({p['reason']}: {why})", flush=True)
+        case "time_entry":
+            print(f"   time entry: {p['work_type']} {p['minutes']} min", flush=True)
 
 
 @asynccontextmanager

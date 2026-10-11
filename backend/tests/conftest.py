@@ -168,7 +168,8 @@ def rt(store, graph, facts, sleeps):
     async def fake_sleep(seconds):
         sleeps.append(seconds)
 
-    return Runtime(store=store, graph=graph, facts=facts, domain=DOMAIN, link_key=LINK_KEY, sleep=fake_sleep)
+    return Runtime(store=store, graph=graph, facts=facts, domain=DOMAIN, link_key=LINK_KEY, sleep=fake_sleep,
+                   closeout_model=drafts_model())
 
 
 @pytest.fixture

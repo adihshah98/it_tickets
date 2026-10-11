@@ -49,3 +49,19 @@ def test_parse_answers():
         "upn_format": "pnair", "start_date": "2026-10-19"}
     with pytest.raises(SystemExit):
         parse_answers(["pnair"])
+
+
+def test_show_prints_close_out_events_without_their_text(capsys):
+    from tech.cli import show
+    from tech.core.store import Event
+
+    show(Event(run_id=1, seq=1, type="done_check", payload={"probe": "user_in_groups", "ok": False, "detail": "x"}))
+    show(Event(run_id=1, seq=2, type="message_blocked",
+               payload={"kind": "reply", "reason": "secret", "hits": [{"kind": "tap_like", "start": 3}]}))
+    show(Event(run_id=1, seq=3, type="message_sent",
+               payload={"kind": "reply", "to": "t@x", "subject": "S", "text": "T"}))
+    show(Event(run_id=1, seq=4, type="time_entry", payload={"work_type": "AI Automation", "minutes": 3,
+                                                           "started_at": "a", "ended_at": "b"}))
+    out = capsys.readouterr().out
+    assert "FAILED user_in_groups" in out and "blocked reply (secret: tap_like)" in out
+    assert "sent reply to t@x: S" in out and "AI Automation 3 min" in out

@@ -25,6 +25,7 @@ async def test_approve_executes_the_plan_to_done(rt, gated, tenant):
     assert await runner.approve(rt, run_id, by="tgarcia") == RunState.DONE
     states = [e.payload["to"] for e in rt.store.events_of(run_id, "state")]
     assert states[-4:] == ["AWAITING_APPROVAL", "EXECUTING", "CLOSING", "DONE"]
+    assert rt.store.events_of(run_id, "done_check") and rt.store.events_of(run_id, "time_entry")
     assert tenant.user_by_upn(f"priya.nair@{DOMAIN}")
     assert all(TAP_VALUE not in str(e.payload) for e in rt.store.events(run_id))
 
@@ -99,7 +100,12 @@ async def test_a_plan_with_nothing_to_approve_runs_straight_away(rt, gated, tena
     run_id = gated(plan_with(drop=("buy_seat", "assign_license_monday", "tap", "send_link")))
     assert state(rt, run_id) == RunState.PLAN_CHECKED
 
-    assert await runner.proceed(rt, run_id) == RunState.DONE
+    assert await runner.proceed(rt, run_id) == RunState.ESCALATED  # ran without approval; DoD not met
+    states = [e.payload["to"] for e in rt.store.events_of(run_id, "state")]
+    assert states[-4:] == ["PLAN_CHECKED", "EXECUTING", "CLOSING", "ESCALATED"]
+    escalation = last_state(rt, run_id)
+    assert escalation["kind"] == "dod"
+    assert escalation["failed_probes"] == ["user_has_sku", "tap_active", "message_sent"]
 
 
 async def test_a_failed_step_escalates_with_a_rollback_offer(rt, gated, tenant):
