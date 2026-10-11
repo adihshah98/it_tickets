@@ -46,6 +46,7 @@ def group(gid: str, name: str, kind: str, role_assignable: bool = False) -> dict
 def marcus_transcript() -> Transcript:
     t = Transcript()
     t.record("users.search", {"name": "Marcus"}, [{"id": MARCUS, "displayName": "Marcus Webb"}])
+    t.record("users.get", {"user_id": MARCUS}, {"id": MARCUS, "displayName": "Marcus Webb", "department": "Accounting"})
     t.record("users.memberOf", {"user_id": MARCUS}, [
         group(ACCOUNTING, "Accounting", "m365"),
         group(FINANCE_FILES, "Finance Files", "security"),
@@ -56,6 +57,7 @@ def marcus_transcript() -> Transcript:
     ])
     t.record("users.licenseDetails", {"user_id": MARCUS}, [{"skuId": SPB, "skuPartNumber": "SPB"}])
     t.record("subscribedSkus.list", {}, [{"skuId": SPB, "skuPartNumber": "SPB", "available": 0}])
+    t.record("users.list", {}, [{"id": MARCUS, "userPrincipalName": f"marcus.webb@{DOMAIN}"}])
     return t
 
 
@@ -69,6 +71,14 @@ NEW = "$ref:create_user.output.id"
 ONBOARD_PLAN = {
     "intent": "user.onboard",
     "summary": "Onboard Priya Nair like Marcus Webb",
+    "assumptions": [
+        "peer is Marcus Webb, named in the request",
+        "start_date is Monday 2026-10-12, so the license is assigned on the start date",
+    ],
+    "confirm_on_approval": [
+        {"key": "upn_format", "question": "Use priya.nair@ (the recent-hire format)?",
+         "proposed": f"priya.nair@{DOMAIN}", "evidence": "recent hires use first.last@"},
+    ],
     "steps": [
         step("create_user", "user.create", {
             "displayName": "Priya Nair", "userPrincipalName": f"priya.nair@{DOMAIN}", "mailNickname": "priya.nair",

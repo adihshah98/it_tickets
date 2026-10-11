@@ -85,3 +85,57 @@ def test_ids_are_compared_ignoring_case(transcript, playbooks, facts):
     upper = step("g", "group.addMember", {"groupId": ACCOUNTING.upper(), "userId": NEW}, "write.reversible",
                  ("create_user",))
     assert problems(plan_with(upper, drop=("add_accounting",)), transcript, playbooks, facts) == []
+
+
+# ------------------------------------------------------------------ rules 4-7
+
+
+def test_rule4_a_missing_dod_producer_is_flagged(transcript, playbooks, facts):
+    # Drop the tap.create and link steps: nothing can meet 'tap_active' or 'message_sent'.
+    found = problems(plan_with(drop=("tap", "send_link")), transcript, playbooks, facts)
+    assert any("definition of done 'tap_active'" in p and "tap.create" in p for p in found)
+    assert any("definition of done 'message_sent'" in p for p in found)
+
+
+def test_rule4_a_structural_dod_item_needs_no_step(transcript, playbooks, facts):
+    # needs_technician_listed is satisfied by the plan structure, not a write, so dropping no step for
+    # it is fine; the good plan already passes, proving the structural item isn't demanded as a step.
+    assert problems(plan_with(), transcript, playbooks, facts) == []
+
+
+def test_rule5_an_uncalled_must_investigate_tool_is_flagged(playbooks, facts):
+    from tech.graph.reads import Transcript
+    bare = Transcript()  # investigated nothing
+    found = problems(plan_with(), bare, playbooks, facts)
+    assert any("investigating with users.search" in p for p in found)
+
+
+def test_rule6_an_unresolved_question_is_flagged(transcript, playbooks, facts):
+    import copy
+
+    from conftest import ONBOARD_PLAN
+    data = copy.deepcopy(ONBOARD_PLAN)
+    data["assumptions"] = []
+    data["confirm_on_approval"] = []  # nothing resolves start_date / peer / upn_format
+    found = problems(Plan.model_validate(data), transcript, playbooks, facts)
+    assert any("resolve 'upn_format'" in p for p in found)
+
+
+def test_rule6_a_pause_for_the_requester_waives_questions(transcript, playbooks, facts):
+    import copy
+
+    from conftest import ONBOARD_PLAN
+    data = copy.deepcopy(ONBOARD_PLAN)
+    data["assumptions"] = []
+    data["confirm_on_approval"] = []
+    data["questions_for_requester"] = ["Which peer should Priya be copied from?"]
+    found = problems(Plan.model_validate(data), transcript, playbooks, facts)
+    assert not any("resolve" in p for p in found)
+
+
+def test_rule7_a_forward_dependency_is_flagged(transcript, playbooks, facts):
+    # A step depending on one declared after it.
+    forward = step("early", "tap.create", {"userId": NEW}, "security.credential", ("create_user", "late"))
+    late = step("late", "tap.create", {"userId": NEW}, "security.credential", ("create_user",))
+    found = problems(plan_with(forward, late, drop=("tap",)), transcript, playbooks, facts)
+    assert any("depends_on 'late' comes later" in p for p in found)

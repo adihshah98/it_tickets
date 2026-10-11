@@ -1,7 +1,6 @@
-"""Plan linter, rules 1-3 (Tech.MD §4.3). Runs as the investigator's output validator.
+"""Plan linter, rules 1-7 (Tech.MD §4.3). Runs as the investigator's output validator.
 
 Each problem is one sentence the model can act on; a non-empty list goes back to it as ModelRetry.
-Rules 4-7 (definition of done, must-investigate, questions, ordering) arrive in Week 3.
 
   1. Schema:    the action is in the catalogue and its params validate; step ids are unique.
   2. Grounded:  every object ID in the params was observed during investigation, and every
@@ -9,6 +8,16 @@ Rules 4-7 (definition of done, must-investigate, questions, ordering) arrive in 
                 and that produces that output.
   3. In scope:  the action is allowed by a triaged intent's playbook, and a group add targets
                 a group the agent may change (see policy.group_problem).
+  4. Covers DoD:         every required definition_of_done item has a step that could satisfy it,
+                         or is one the plan covers by listing it under needs_technician.
+  5. Must-investigate:   every must_investigate tool was actually called in the transcript.
+  6. Questions resolved: every questions_to_resolve topic is answered (an assumption or a
+                         confirm_on_approval entry), or the plan pauses with questions_for_requester.
+  7. Ordering sane:      depends_on points only backwards and has no cycles.
+
+Rules 4-6 use the playbooks, so they run only for a playbook-backed plan (not an escalation or a
+no-playbook run). Rule 6 is deliberately lenient (keyword presence): the investigator has only two
+lint retries, so a false rejection there is worse than a missed question the gate still gates.
 """
 
 from __future__ import annotations
@@ -27,6 +36,31 @@ from tech.safety.policy import group_problem
 
 # Which action produces each kind of step output a later step can reference.
 PRODUCES = {"id": {"user.create"}, "tap": {"tap.create"}}
+
+# Rule 4: which plan action(s) could satisfy each definition_of_done probe. A required probe passes
+# the linter if the plan has a step with one of its producing actions; the probe itself re-checks
+# against live state at close-out. Probes not listed here are STRUCTURAL/OPTIONAL below.
+DOD_PRODUCERS: dict[str, set[str]] = {
+    "user_exists": {"user.create"},
+    "user_property": {"user.create", "user.update"},
+    "user_has_sku": {"license.assign", "followup.schedule"},
+    "user_in_groups": {"group.addMember"},
+    "tap_active": {"tap.create"},
+    "message_sent": {"link.sendOneTime"},
+    "account_disabled": {"user.update"},
+    "sessions_revoked": {"sessions.revoke"},
+    "auto_reply_set": {"mailbox.autoReply"},
+    "forward_rule_active": {"mailbox.forwardRule"},
+    "removed_from_groups": {"group.removeMember"},
+    "ownership_transferred": {"group.addOwner"},
+    "oob_confirmed": {"tap.create", "authMethod.delete"},  # a credential write means OOB was required first
+    "old_methods_removed": {"authMethod.delete"},
+    "followup_scheduled": {"followup.schedule"},
+}
+# Probes the plan satisfies by structure (a needs_technician entry), not by a write.
+STRUCTURAL_DOD = {"needs_technician_listed"}
+# Probes that apply only "if requested"; their absence is never a problem (the YAML notes them in a comment).
+OPTIONAL_DOD = {"auto_reply_set", "forward_rule_active"}
 
 
 def _strings(value: Any) -> Iterator[str]:
@@ -107,4 +141,66 @@ def lint(plan: Plan, transcript: Transcript, playbooks: dict[str, Playbook], fac
             problems.append(f"Step {sid}: {problem[1]}.")
 
         earlier[sid] = action
+
+    # 7. ordering sane (every step, referenced or not): backward deps only, no cycles
+    problems += _ordering_problems(plan)
+    # 4-6 need the playbook; skip them for an escalation or a no-playbook plan (handled above)
+    if playbooks:
+        actions = {s.action for s in plan.steps}
+        for playbook in playbooks.values():
+            problems += _dod_problems(playbook, actions)
+            problems += _must_investigate_problems(playbook, transcript)
+            problems += _question_problems(playbook, plan)
     return problems
+
+
+def _ordering_problems(plan: Plan) -> list[str]:
+    """Rule 7: depends_on points only at earlier steps, and the dependency graph has no cycle.
+
+    A dependency resolves to the first step with that id (duplicate ids are rule 1's concern), so a
+    backward dep to the first occurrence isn't double-reported as forward here.
+    """
+    first: dict[str, int] = {}
+    for i, step in enumerate(plan.steps):
+        first.setdefault(step.id, i)
+    problems: list[str] = []
+    for i, step in enumerate(plan.steps):
+        for dep in step.depends_on:
+            if dep not in first:
+                problems.append(f"Step {step.id}: depends_on {dep!r}, which is not a step in this plan.")
+            elif first[dep] >= i:
+                problems.append(f"Step {step.id}: depends_on {dep!r} comes later; put dependencies first.")
+    return problems
+
+
+def _dod_problems(playbook: Playbook, actions: set[str]) -> list[str]:
+    """Rule 4: every required DoD item has a step whose action could satisfy it."""
+    problems: list[str] = []
+    for item in playbook.definition_of_done:
+        name = next(iter(item))
+        if name in STRUCTURAL_DOD or name in OPTIONAL_DOD:
+            continue
+        producers = DOD_PRODUCERS.get(name)
+        if producers and not (producers & actions):
+            makers = " or ".join(sorted(producers))
+            problems.append(f"Nothing in the plan meets the definition of done '{name}'; add a {makers} step, "
+                            f"or list it under needs_technician with a reason.")
+    return problems
+
+
+def _must_investigate_problems(playbook: Playbook, transcript: Transcript) -> list[str]:
+    """Rule 5: every must_investigate tool was actually called."""
+    return [f"The playbook requires investigating with {tool}, but it was never called; look it up before planning."
+            for tool in dict.fromkeys(playbook.must_investigate_tools) if not transcript.called(tool)]
+
+
+def _question_problems(playbook: Playbook, plan: Plan) -> list[str]:
+    """Rule 6 (lenient): each questions_to_resolve topic appears in an assumption or a confirm field,
+    unless the plan pauses for the requester (then every question is deferred to them)."""
+    if plan.questions_for_requester:
+        return []
+    answered = " ".join([*plan.assumptions, *(f"{c.key} {c.question} {c.proposed}" for c in plan.confirm_on_approval)])
+    answered = answered.casefold()
+    return [f"The playbook asks to resolve '{topic}', but nothing in the plan answers it; state an assumption, "
+            f"confirm it on the approval card, or ask the requester."
+            for topic in playbook.questions_to_resolve if topic.casefold() not in answered]
