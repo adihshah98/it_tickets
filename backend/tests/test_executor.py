@@ -175,6 +175,6 @@ def test_compare_checks_known_keys_and_lists_the_rest():
 
 def test_the_guard_refuses_a_payload_with_a_secret():
     secrets = Secrets()
-    secrets.watch("hunter2")
+    secrets.watch("hunter2-secret")
     with pytest.raises(SecretLeak):
-        secrets.guard({"note": "your code is hunter2"})
+        secrets.guard({"note": "your code is hunter2-secret"})

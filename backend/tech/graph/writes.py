@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from tech.graph.client import GRAPH, GraphClient, GraphError
+from tech.safety import scanner
 
 if TYPE_CHECKING:
     from tech.core.store import Store
@@ -66,10 +67,8 @@ class Secrets:
 
     def guard(self, payload: Any) -> None:
         """Raise before a payload holding a secret reaches the event log. Known values only: event payloads
-        (tool results, outputs) are full of random-looking IDs that the scanner's patterns would flag. Any
-        non-empty watched value counts, whatever its length (the scanner's MIN_KNOWN is for free text)."""
-        text = json.dumps(payload, default=str)
-        if any(value and value in text for value in self._watched):
+        (tool results, outputs) are full of random-looking IDs that the scanner's patterns would flag."""
+        if scanner.scan(json.dumps(payload, default=str), known=self._watched, patterns=False):
             raise SecretLeak("an event payload contained a secret; it was not written")
 
 
