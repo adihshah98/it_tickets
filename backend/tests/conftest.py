@@ -9,6 +9,25 @@ from tech.core.models import Plan
 from tech.graph.reads import Transcript
 from tech.playbooks import load_client_facts, load_playbooks
 
+
+def drafts_model(reply: str = "Hi Taylor, Priya is set up. Sign-in link: {{link}}. Use the Outlook mobile app.",
+                 note: str = "Created priya.nair; groups mirrored; license follow-up Monday.",
+                 subject: str = "Priya Nair is set up"):
+    """A FunctionModel standing in for Sonnet at close-out: returns these drafts, and keeps the prompts it got."""
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+
+    def respond(messages, info):
+        respond.prompts.append(messages)
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {
+            "reply_subject": subject, "reply_body": reply, "psa_note": note})])
+
+    respond.prompts = []
+    model = FunctionModel(respond)
+    model.prompts = respond.prompts
+    return model
+
+
 DOMAIN = "NorthwindParking.onmicrosoft.com"
 MARCUS = "8a590663-09f2-4ee8-ab1a-6195ca3943f9"
 SPB = "cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46"
