@@ -60,10 +60,16 @@ class Secrets:
     def watch(self, value: str) -> None:
         self._watched.add(value)
 
+    def known(self) -> set[str]:
+        """Every secret this execution holds, for the close-out scanner."""
+        return set(self._watched)
+
     def guard(self, payload: Any) -> None:
-        """Raise before a payload holding a secret reaches the event log. The Day 8 scanner generalises this."""
+        """Raise before a payload holding a secret reaches the event log. Known values only: event payloads
+        (tool results, outputs) are full of random-looking IDs that the scanner's patterns would flag. Any
+        non-empty watched value counts, whatever its length (the scanner's MIN_KNOWN is for free text)."""
         text = json.dumps(payload, default=str)
-        if any(value in text for value in self._watched):
+        if any(value and value in text for value in self._watched):
             raise SecretLeak("an event payload contained a secret; it was not written")
 
 

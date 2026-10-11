@@ -19,6 +19,7 @@ from sqlmodel import select
 from tech.core.models import parse_ref
 from tech.core.store import Link, NotFound, Store, utcnow
 from tech.graph.writes import Deviation, Handler
+from tech.safety import scanner
 
 
 def create(store: Store, *, key: str, run_id: int, step_id: str, tap: str, user_id: str, to: str,
@@ -112,6 +113,8 @@ class LinkSend(Handler):
     async def act(self, ctx, p):
         if not ctx.link_key:
             raise Deviation("no LINK_KEY configured to encrypt the link")
+        if p.get("note") and scanner.scan(p["note"]):
+            raise Deviation("the link note looks like it holds a secret (password, token or TAP); it was not sent")
         ref = parse_ref(p.get("tap"))
         tap = ctx.secrets.tap(ref[0]) if ref else ctx.secrets.tap_for_user(p["userId"])
         if tap is None:
