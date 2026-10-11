@@ -20,6 +20,7 @@ class GroupHandling(BaseModel):
     group: str
     handling: Literal["automatic", "technician"]
     note: str
+    aka: list[str] = []  # other names a needs_technician item may use for it (close-out's DoD probe)
 
 
 class ClientFacts(BaseModel):

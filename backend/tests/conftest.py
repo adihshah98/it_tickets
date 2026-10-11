@@ -177,3 +177,18 @@ def gated(rt, playbooks):
         return run_id
 
     return make
+
+
+@pytest.fixture
+def executed(rt, gated, tenant):
+    """A gated run whose plan has been executed against the fake tenant (no close-out): (run_id, plan)."""
+    from tech.execution.executor import Execution
+
+    async def make(plan: Plan | None = None) -> tuple[int, Plan]:
+        plan = plan or plan_with()
+        run_id = gated(plan)
+        result = await Execution(rt.store, run_id, rt.graph, DOMAIN, link_key=LINK_KEY, sleep=rt.sleep).run(plan)
+        assert result.ok, result.error
+        return run_id, plan
+
+    return make

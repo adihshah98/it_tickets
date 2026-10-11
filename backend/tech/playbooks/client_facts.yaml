@@ -12,9 +12,9 @@ approvers:
 group_handling:               # how to treat a peer's groups when mirroring access
   - {group: "Northwind Parking", handling: automatic,
      note: "Org-wide group; every user is added automatically. Never mirror it."}
-  - {group: "RDS-Users", handling: technician,
+  - {group: "RDS-Users", handling: technician, aka: ["NW-TS-01", "hosted desktop", "RDS"],
      note: "Marks hosted desktop (NW-TS-01) access. Do not mirror; list under needs_technician."}
-  - {group: "VPN-Users", handling: technician,
+  - {group: "VPN-Users", handling: technician, aka: ["VPN"],
      note: "Marks Meraki VPN access. Do not mirror; list under needs_technician (VPN approver: kevin@{domain})."}
 license_reserve:              # not a problem to report
   - {users: "seat-holder*",

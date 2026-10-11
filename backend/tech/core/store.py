@@ -41,7 +41,7 @@ class RunState(StrEnum):
 EVENT_TYPES = frozenset({
     "state", "triage", "tool_call", "finding", "plan", "lint_result", "gate_decision", "approval",
     "step_started", "step_verified", "step_failed", "replan", "done_check", "message_sent", "error",
-    "playbook_drafted", "playbook_approved", "link_viewed",
+    "playbook_drafted", "playbook_approved", "link_viewed", "message_blocked", "time_entry",
 })
 
 
