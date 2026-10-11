@@ -17,10 +17,22 @@
       "Bash(cp /Users/aditya/.claude/plans/make-a-plan-for-quiet-turtle.md docs/demo/Build-Day4.md)",
       "Bash(sed -i '' 's#^First implementation step: save this plan as .*$#This plan lives at `docs/demo/Build-Day4.md`.#' docs/demo/Build-Day4.md)",
       "Bash(sed -i '' 's#]\\(docs/demo/Build-W1-2.md\\)#]\\(Build-W1-2.md\\)#; s#]\\(backend/#]\\(../../backend/#g' docs/demo/Build-Day4.md)",
-      "Bash(sed -i '' '12{/This plan lives at/d;}' docs/demo/Build-Day4.md && sed -n 9,14p docs/demo/Build-Day4.md)"
+      "Bash(sed -i '' '12{/This plan lives at/d;}' docs/demo/Build-Day4.md && sed -n 9,14p docs/demo/Build-Day4.md)",
+      "Bash(sed '3,4d' /Users/aditya/.claude/plans/plan-day-5-memoized-lamport.md > docs/demo/Build-Day5.md && head -5 docs/demo/Build-Day5.md)",
+      "Bash(cat >> *)",
+      "Bash(grep -n 'test_writes\\\\|test_mocks\\\\|^`execute\\(' docs/demo/Build-Day5.md)",
+      "Bash(grep -v \"^\\\\s*$\")",
+      "ClaudeInChromeDomain(localhost:3000)",
+      "Bash(bash /Users/aditya/.claude/plugins/cache/claude-plugins-official/superpowers/6.4.1/skills/subagent-driven-development/scripts/review-package docs/demo/Build-Day8.md ebb4744 HEAD)",
+      "Bash(bash /Users/aditya/.claude/plugins/cache/claude-plugins-official/superpowers/6.4.1/skills/subagent-driven-development/scripts/review-package docs/demo/Build-Day8.md 5e6a845 HEAD)",
+      "Bash(bash /Users/aditya/.claude/plugins/cache/claude-plugins-official/superpowers/6.4.1/skills/subagent-driven-development/scripts/review-package docs/demo/Build-Day8.md 487f495 HEAD)",
+      "Bash(bash /Users/aditya/.claude/plugins/cache/claude-plugins-official/superpowers/6.4.1/skills/subagent-driven-development/scripts/task-brief docs/demo/Build-Day8.md 5)",
+      "Bash(bash /Users/aditya/.claude/plugins/cache/claude-plugins-official/superpowers/6.4.1/skills/subagent-driven-development/scripts/review-package docs/demo/Build-Day8.md 888bb55 HEAD)"
     ],
     "additionalDirectories": [
-      "/Users/aditya/Desktop/it_tickets/docs/demo"
+      "/Users/aditya/Desktop/it_tickets/docs/demo",
+      "/Users/aditya/Desktop/it_tickets/backend/tests",
+      "/Users/aditya/Desktop/it_tickets/.venv/lib/python*/site-packages/fastapi"
     ]
   }
 }

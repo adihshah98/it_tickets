@@ -23,14 +23,16 @@ MIN_KNOWN = 8
 
 HitKind = Literal["known_secret", "password", "token", "tap_like"]
 
-SECRETISH = r"(?=\S*[0-9!#$%&*+=?^~|<>{}\\])\S{4,}"  # a value with a digit or a symbol; "shown." isn't one
+SECRETISH = r"(?=\S*[0-9!#$%&*+=?^~|\\])\S{4,}"  # a value with a digit or a symbol; "shown." isn't one
+# A keyword's value: 8+ characters with a digit or a symbol, and not a date ("TAP: 2026-10-12T17:00Z expiry").
+VALUE = r"(?!\d{4}-\d{2}-\d{2})(?=\S*[0-9!#$%&*+=?^~|\\])\S{8,}"
 PATTERNS: list[tuple[HitKind, re.Pattern[str]]] = [
     ("password", re.compile(
-        rf"(?i)\b(pass(word|code|phrase)?|pwd|temporary access pass|tap)\b\s*(is|:|=)\s*{SECRETISH}")),
+        rf"(?i)\b(pass(word|code|phrase)?|pwd|temporary access pass|tap)\b\s*(is|:|=)\s*{VALUE}")),
     ("token", re.compile(r"\beyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]{5,}")),
     ("token", re.compile(r"(?i)\bbearer\s+[\w\-.~+/]{20,}")),
     ("token", re.compile(r"\bsk-[\w-]{20,}")),
-    ("token", re.compile(r"(?i)\b(api[_-]?key|client[_-]?secret|secret|access[_-]?token|token)\b\s*[:=]\s*\S{8,}")),
+    ("token", re.compile(r"(?i)\b(api[_-]?key|client[_-]?secret|secret|access[_-]?token|token)\b\s*[:=]\s*" + VALUE)),
 ]
 WORD = re.compile(r"\S{8,48}")
 STRIP = "()[]<>\"',.;:"
@@ -64,6 +66,7 @@ def scan(text: str, *, known: Iterable[str] = (), patterns: bool = True) -> list
             hits += [Hit(kind, m.start(), m.end()) for m in pattern.finditer(text)]
         for m in WORD.finditer(text):
             word = m.group().strip(STRIP)
-            if len(word) >= 8 and _tap_like(word):
+            if len(word) >= 8 and not word.startswith(("http://", "https://")) and "@" not in word \
+                    and _tap_like(word):
                 hits.append(Hit("tap_like", m.start(), m.end()))
     return sorted(hits, key=lambda h: h.start)

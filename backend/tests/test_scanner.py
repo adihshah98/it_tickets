@@ -55,6 +55,16 @@ def test_a_normal_reply_and_psa_note_are_clean():
     assert scan(text) == []
 
 
+@pytest.mark.parametrize("text", [
+    "Your Temporary Access Pass: LINKHERE", "Use this link to get her Temporary Access Pass: LINKHERE and sign in",
+    "Her sign-in pass is LINKHERE", "Your Temporary Access Pass: {{link}}", "Her sign-in pass is {{link}}",
+    "TAP: 2026-10-12T17:00Z expiry", "The pass is 1-time use only", "Token: delivered via one-time link",
+    "https://x.com/a?id=Ab12cd34", "priya+Test1@corp.com", "Tag <b>x</b> and {braces}",
+])
+def test_terse_phrasings_urls_and_emails_are_clean(text):
+    assert scan(text) == []
+
+
 def test_hits_carry_kind_and_offsets_but_never_the_text():
     hit = scan(f"x {TAP_VALUE}", known=[TAP_VALUE])[0]
     assert hit.payload() == {"kind": "known_secret", "start": 2}

@@ -814,100 +814,20 @@ Run the eval on every prompt or playbook change. The demo ships only at 28/28. C
 
 ---
 
+Week 1+2
 
+- Done
 
-## 13. Build plan (about 4 weeks, 1 engineer, plus an optional week 5)
+Week 3
 
-The plan builds one scenario end to end first, so there is something to show by the end of week 2. Each later week adds depth to a working demo.
+- Offboarding + MFA
 
-### Before day 1: accounts and costs
+Week 4
 
+- Learning new playbooks
+- Resolving ticket with no priot info
 
-| Item                                     | What to set up                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Cost (verify current prices)                                                                                                                                                                                                                                                                                                                  |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Microsoft 365 tenant**                 | **First:** check whether you qualify for the free Microsoft 365 E5 developer sandbox (now limited to Visual Studio Professional/Enterprise subscribers and Microsoft partner program members). **Otherwise, during the build:** a **Business Premium trial** (30 days, 25 licenses, card required; **turn off recurring billing on day 1** so it doesn't convert to paid; extending the trial may be possible). **After the trial:** the minimal mix: 4 × Business Basic (Marcus, Kevin, Taylor, `seat-holder`) + 1 × Entra ID P1 (Dennis). The P1 license turns on TAP and Graph sign-in logs for the tenant. Use the `.onmicrosoft.com` domain | Sandbox: free if eligible. Trial: free. After: about **$30–35 per month** (Business Basic about $6–7 per user, Entra ID P1 about $6), against about $150–180 for Business Premium on every user. Strictly, every user who gets a TAP should have P1; fine for a test tenant, not for a client                                                 |
-| **Entra app registration**               | One app, app-only permissions from §7, admin consent, a self-signed certificate                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Free                                                                                                                                                                                                                                                                                                                                          |
-| **A phone with Microsoft Authenticator** | Register it for "Dennis" so the MFA reset deletes a real Authenticator method. Your own phone works; Authenticator holds several accounts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Free                                                                                                                                                                                                                                                                                                                                          |
-| **Anthropic API**                        | Console account, API key, prepaid credits                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Opus 5.5 is $4 / $20 per million input / output tokens (cache reads $0.20); Sonnet 5.5 is $2 / $10; Haiku 4.5 is $1 / $5. Rough estimate: **$0.50–1.50 per full scenario run** (mostly Opus investigation), **$15–40 per full 28-case eval run**. Budget **about $200–300 for the build month**; measure real cost per run in the day-1 tests |
-| **Logfire**                              | Project for traces                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Free tier is enough for the demo                                                                                                                                                                                                                                                                                                              |
-| **Hosting**                              | None. The demo runs on a laptop (FastAPI + Next.js + SQLite)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Free                                                                                                                                                                                                                                                                                                                                          |
-| **Mocked, nothing to buy**               | Pax8 (license purchase), SMS or phone for the out-of-band check                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Free                                                                                                                                                                                                                                                                                                                                          |
-| **Optional, week 5: PSA**                | HaloPSA trial (easiest to get), or a ConnectWise developer account if a design partner sponsors one                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Trial is free; time it to start in week 5                                                                                                                                                                                                                                                                                                     |
+Week 5 
 
-
-**Total cash outlay for the 4-week build:** about **$200–300 in API credits**. Microsoft is free during the trial, then about **$30–35 per month**.
-
-### Days 1–2: test the risks
-
-Each of these could change a scenario, so check them before writing agent code.
-
-
-| Test                                                                                                                                            | Pass means                                                               | If it fails                                                                                                                                                                                     |
-| ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Tenant: TAP policy on; a test user signs in and sign-in logs appear                                                                             | TAP issuance works; `signInActivity` and `auditLogs/signIns` return data | Wait for log latency, or mock sign-in data                                                                                                                                                      |
-| App-only writes: create user, set `usageLocation`, assign license, add to group, create TAP, revoke sessions, set auto-reply, create inbox rule | Each call succeeds and its verify read matches                           | Fix permissions; drop the step to `needs_technician`                                                                                                                                            |
-| App-only **delete of an Authenticator method** on the phone-registered test user                                                                | Method removed                                                           | Mock the delete for the MFA scenario; keep the TAP                                                                                                                                              |
-| Files: upload a file several times; list versions; `restoreVersion` app-only                                                                    | A new current version matches the chosen one                             | Swap scenario 3.4 for another Graph-only ticket (for example the monthly user review, 227886)                                                                                                   |
-| **Model call through PydanticAI with** `output_type=Plan` **on** `claude-opus-5-5`                                                              | Returns a validated `Plan`                                               | Opus 5.5 and Sonnet 5.5 reject forced tool choice with a 400. If PydanticAI's default tool output forces it, switch to native structured output or an output mode that uses `tool_choice: auto` |
-| **Safety classifier check:** run the MFA reset, takeover-refusal and prompt-injection tickets through the investigator                          | No `refusal` stop reason, or refusals handled                            | Handle `stop_reason == "refusal"`; enable the server-side fallback; reword the system prompt                                                                                                    |
-| **Latency:** one onboarding investigation with about 10 reads                                                                                   | Under about 90 seconds, with findings streaming                          | Allow parallel reads; set Opus effort explicitly (its default is `medium`); trim the tool list per intent                                                                                       |
-| **Cost:** record token usage for that run                                                                                                       | Matches the estimate above                                               | Tune caching and effort                                                                                                                                                                         |
-
-
-**Exit:** a short list of what's real and what's mocked. Update [Product.MD §4](Product.MD#4-whats-real-vs-mocked).
-
-### Weeks 1–2: onboarding end to end (thin)
-
-- **Tenant tooling:** seed and reset scripts for the onboarding scenario only.
-- **Graph client:** the onboarding read and write tools, each with a verify read.
-- **Executor:** snapshot, then act, then verify, with retries for replication lag.
-- **Run store and event stream** over SSE.
-- **Intake (Haiku)** and the **investigator (Opus)**, with onboarding read tools plus `record_finding`.
-- **Plan linter, rules 1–3 only** (schema valid, grounded, in scope).
-- **Policy gate** with the fixed risk-class rules (no autonomy levels yet).
-- **One approval card** and a **plain workspace UI** that streams findings, the plan, then execution.
-- **Close-out:** the reply and PSA note in our own view, the one-time link, and the secret scanner.
-
-**Exit:** the Priya onboarding runs live in under 3 minutes. **Start demo meetings now** (see [Product.MD §9](Product.MD#9-how-the-demo-is-used-sales-sequence)); don't wait for week 4. Let their reactions set priorities for weeks 3–4.
-
-### Week 3: offboarding, MFA reset and safety depth
-
-- Offboarding and MFA-reset playbooks, the HELD flow for unapproved requesters, and the mocked out-of-band check.
-- Linter rules 4–7, the full gate, the replanner, and the definition-of-done check.
-- The audit trail and safe-mode recording.
-- **Exit:** eval cases 1–22 passing.
-
-
-
-### Week 4: unknown tickets, learning and polish
-
-- The no-playbook path: allow-list, `Escalation` output, gate rules.
-- File search, version and restore tools.
-- Per-client autonomy in the gate.
-- The playbook drafter with code checks, and the playbook screen (review, version, autonomy).
-- The time-saved card and preflight check.
-- **Exit:** eval set at 28/28; rehearse the script.
-
-
-
-### If time runs short: what to cut
-
-Much of the build is product groundwork a viewer barely sees in 10 minutes. It all carries over (§14), so build it if there's time. Cut in this order:
-
-1. **The replanner.** The executor's automatic retry already gives the "it recovered" moment. A deviation escalates instead.
-2. **The eval gate.** Reduce the ship gate from 28 cases to the 12 or so that cover the demo script (1, 4, 5, 6, 8, 10, 11, 12, 15, 23, 25, 27). Keep the rest as a backlog.
-3. **Autonomy levels.** Replace A1/A2/A3 with one "run without approval" switch on the learned playbook.
-
-Never cut: the policy gate, verifying each step by reading it back, the secret scanner, or safe mode.
-
-### Week 5 (optional): a real PSA
-
-Only if weeks 1–4 finish on time:
-
-- Tickets arrive from a HaloPSA trial instead of being pasted in.
-- The agent writes its note and time entry back to the PSA ticket.
-
-This answers "does it work in my PSA?", which competitors like Squash lead with. Our own ticket view stays as the fallback.
-
----
+- PSA integration?
 
