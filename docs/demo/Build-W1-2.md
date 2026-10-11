@@ -170,6 +170,12 @@ it_tickets/
   - Sonnet (`claude-sonnet-5-5`) drafts the reply to Taylor (link, Outlook mobile tip) and the PSA note;
   - a time entry ("AI Automation", actual duration).
 - Each close-out item is shown in the workspace. (Done. The manual UI walkthrough is still pending.)
+- Open items for Day 9: the live onboarding test (`test_live_onboard.py`) passed 2 of 6 runs.
+  - Causes seen:
+    - the investigator's plan sometimes omits `license.purchase` (the gate-decision check fails);
+    - Graph `memberOf` lag in the test's own read (now polled);
+    - two early ESCALATED runs, from before the test reported why a run didn't reach DONE (cause unknown).
+  - Timing for Day 9: 76-90 s per live test run, about 34 s of it execution.
 - Tests (done): the scanner blocks a draft containing the TAP, and a DoD probe fails on a missing group.
 
 ### Day 9. Speed and robustness

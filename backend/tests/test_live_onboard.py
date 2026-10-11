@@ -51,7 +51,8 @@ async def test_priya_onboarding_end_to_end():
         run_id = store.create_run(store.create_ticket(TICKET, taylor).id).id
         assert await runner.start(rt, run_id, TICKET, taylor) == RunState.AWAITING_APPROVAL
         decisions = {e.payload["action"]: e.payload["decision"] for e in store.events_of(run_id, "gate_decision")}
-        assert decisions["license.purchase"] == decisions["tap.create"] == "approve"
+        assert "license.purchase" in decisions and "tap.create" in decisions, f"plan lacks purchase/TAP steps: {decisions}"
+        assert decisions["license.purchase"] == decisions["tap.create"] == "approve", decisions
 
         final = await runner.approve(rt, run_id, by=taylor, answers={"upn_format": "priya.nair"})
         assert final == RunState.DONE, _diagnosis(store, run_id)
@@ -65,12 +66,13 @@ async def test_priya_onboarding_end_to_end():
         g = rt.graph
         priya = await g.get(f"/users/priya.nair@{settings.domain}", params={"$select": "id,usageLocation"})
         assert priya["usageLocation"] == "US"
-        for _ in range(10):  # memberOf is eventually consistent: a just-added group can lag a few seconds
+        for attempt in range(10):  # memberOf is eventually consistent: a just-added group can lag a few seconds
             names = {grp["displayName"] async for grp in g.list(f"/users/{priya['id']}/memberOf",
                                                                 {"$select": "displayName"})}
             if {"Accounting", "Finance Files"} <= names:
                 break
-            await asyncio.sleep(3)
+            if attempt < 9:
+                await asyncio.sleep(3)
         assert {"Accounting", "Finance Files"} <= names
         assert not names & {"RDS-Users", "VPN-Users", "Northwind Parking"}
         assert await member_group_ids(g, priya["id"])
