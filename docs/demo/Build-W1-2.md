@@ -159,10 +159,11 @@ it_tickets/
   - **Approval card**, with the risky steps highlighted and editable confirm fields (UPN format, purchase);
   - **Live execution**, showing verified or retried for each step;
   - **Needs a technician**.
+- Senders and the sample tickets are hardcoded (no `/contacts`). The one-time link page moved here from Day 8, because the snapshot's link URL already points at the web app (see [Build-Day7.md](Build-Day7.md)).
 
 ### Day 8. Close-out
 
-- `links.py`: the TAP is Fernet-encrypted and shown once, then the record is destroyed. The page shows the TAP and the sign-in steps.
+- `links.py`: the TAP is Fernet-encrypted and shown once, then the record is destroyed. (Done: Day 6 wipes it on reveal, and Day 7 built the page with the TAP and the sign-in steps.)
 - `scanner.py`: regexes for TAP-like strings, passwords and tokens, plus the actual TAP values held for the run. Every outbound text goes through it; a hit blocks the send and emits an event.
 - `closeout.py`:
   - the DoD probes from `user.onboard.yaml` (`user_exists`, usageLocation, `user_in_groups`, `tap_active`, license or follow-up, `needs_technician_listed`);

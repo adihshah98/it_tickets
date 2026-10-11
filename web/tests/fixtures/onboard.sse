@@ -1,0 +1,195 @@
+event: state
+data: {"from": null, "to": "RECEIVED"}
+id: 1
+
+event: triage
+data: {"triage": {"intents": ["user.onboard"], "entities": {"new_user": {"display_name": "Priya Nair", "department": "accounting", "job_title": null, "start_date": "2026-10-12"}, "peer_user_hint": "Marcus", "subject_user_hint": null, "apps": ["Office", "Teams"]}, "requester": {"name": "<UNKNOWN>", "email": "tgarcia@northwindparking.onmicrosoft.com"}, "out_of_scope_asks": [], "missing_info": ["Priya Nair's job title", "Marcus's full name or identifier to determine exact setup/configuration"]}, "requester_approved": true, "requester_scopes": {"user.onboard": true}}
+id: 2
+
+event: state
+data: {"from": "RECEIVED", "to": "TRIAGED"}
+id: 3
+
+event: state
+data: {"from": "TRIAGED", "to": "INVESTIGATING"}
+id: 4
+
+event: tool_call
+data: {"tool": "users.search", "args": {"name": "Marcus"}, "ok": true, "error": null, "result": [{"id": "8a590663-09f2-4ee8-ab1a-6195ca3943f9", "displayName": "Marcus Webb", "userPrincipalName": "marcus@NorthwindParking.onmicrosoft.com", "jobTitle": "Senior Accountant", "department": "Accounting", "accountEnabled": true, "createdDateTime": "2026-10-09T20:58:37Z", "usageLocation": "US"}], "t": 3.0}
+id: 5
+
+event: tool_call
+data: {"tool": "users.search", "args": {"name": "Priya"}, "ok": true, "error": null, "result": [], "t": 3.0}
+id: 6
+
+event: tool_call
+data: {"tool": "users.list", "args": {}, "ok": true, "error": null, "result": [{"id": "d9ee9d66-afd9-4c39-aa01-c38917d86cd7", "displayName": "Seat Holder 11", "userPrincipalName": "seat-holder-11@NorthwindParking.onmicrosoft.com", "jobTitle": "Placeholder (do not use)", "department": "IT", "accountEnabled": false, "createdDateTime": "2026-10-09T21:00:14Z", "usageLocation": "US"}, {"id": "fe9aa282-0657-4af7-ba82-bfa2ec8ffaa0", "displayName": "Seat Holder 10", "userPrincipalName": "seat-holder-10@NorthwindParking.onmicrosoft.com", "jobTitle": "Placeholder (do not use)", "department": "IT", "accountEnabled": false, "createdDateTime": "2026-10-09T21:00:09Z", "usageLocation": "US"}, {"id": "face36a1-cfd4-497c-b4fd-c0418f065abd", "displayName": "Seat Holder 9", "userPrincipalName": "seat-holder-9@NorthwindParking.onmicrosoft.com", "jobTitle": "Placeholder (do not use)", "department": "IT", "accountEnabled": false, "createdDateTime": "2026-10-09T21:00:05Z", "usageLocation": "US"}, {"id": "2c59b8ab-6549-47c2-917f-a7b8ceb6bb40", "displayName": "Seat Holder 8", "userPrincipalName": "seat-holder-8@NorthwindParking.onmicrosoft.com", "jobTitle": "Placeholder (do not use)", "department": "IT", "accountEnabled": false, "createdDateTime": "2026-10-09T21:00:00Z", "usageLocation": "US"}, {"id": "bc63056b-8512-4efb-aa95-6aa7e4d2a8f0", "displayName": "Seat Holder 7", "userPrincipalName": "seat-holder-7@NorthwindParking.onmicrosoft.com", "jobTitle": "Placeholder (do not use)", "department": "IT", "accountEnabled": false, "createdDateTime": "2026-10-09T20:59:56Z", "usageLocation": "US"}, {"id": "f3cdaa96-5c9d-412f-ab38-6f390de494fc", "displayName": "Seat Holder 6", "userPrincipalName": "seat-holder-6@NorthwindParking.onmicrosoft.com", "jobTitle": "Placeholder (do not use)", "department": "IT", "accountEnabled": false, "createdDateTime": "2026-10-09T20:59:52Z", "usageLocation": "US"}, {"id": "859f3d6b-16b2-4713-ac97-e53488b7af74", "displayName": "Seat Holder 5", "userPrincipalName": "seat-holder-5@NorthwindParking.onmicrosoft.com", "jobTitle": "Placeholder (do not use)", "department": "IT", "accountEnabled": false, "createdDateTime": "2026-10-09T20:59:47Z", "usageLocation": "US"}, {"id": "a3a2d600-ea61-47b6-9f28-316086468c87", "displayName": "Seat Holder 4", "userPrincipalName": "seat-holder-4@NorthwindParking.onmicrosoft.com", "jobTitle": "Placeholder (do not use)", "department": "IT", "accountEnabled": false, "createdDateTime": "2026-10-09T20:59:43Z", "usageLocation": "US"}, {"id": "4e701561-cefe-485e-bca9-a2bc93d2ae41", "displayName": "Seat Holder 3", "userPrincipalName": "seat-holder-3@NorthwindParking.onmicrosoft.com", "jobTitle": "Placeholder (do not use)", "department": "IT", "accountEnabled": false, "createdDateTime": "2026-10-09T20:59:38Z", "usageLocation": "US"}, {"id": "38589ec3-c2be-4a91-8ceb-be9ad3bf1de0", "displayName": "Seat Holder 2", "userPrincipalName": "seat-holder-2@NorthwindParking.onmicrosoft.com", "jobTitle": "Placeholder (do not use)", "department": "IT", "accountEnabled": false, "createdDateTime": "2026-10-09T20:59:34Z", "usageLocation": "US"}, {"id": "9b0551ec-b0e1-4188-b3c1-5309a02e9e63", "displayName": "Seat Holder", "userPrincipalName": "seat-holder@NorthwindParking.onmicrosoft.com", "jobTitle": "Placeholder (do not use)", "department": "IT", "accountEnabled": false, "createdDateTime": "2026-10-09T20:59:29Z", "usageLocation": "US"}, {"id": "732b9178-8011-4aa5-bf1f-895b02518695", "displayName": "Luis Ortega", "userPrincipalName": "luis.ortega@NorthwindParking.onmicrosoft.com", "jobTitle": "Maintenance Technician", "department": "Facilities", "accountEnabled": true, "createdDateTime": "2026-10-09T20:58:43Z", "usageLocation": "US"}, {"id": "06cecc15-8531-4658-873e-94437afb5cf4", "displayName": "Reports Service", "userPrincipalName": "reports@NorthwindParking.onmicrosoft.com", "jobTitle": "Service account (reporting app)", "department": "IT", "accountEnabled": true, "createdDateTime": "2026-10-09T20:58:43Z", "usageLocation": "US"}, {"id": "0cbd5957-b684-4a4b-afb3-07a75706e9ed", "displayName": "Grace Kim", "userPrincipalName": "grace.kim@NorthwindParking.onmicrosoft.com", "jobTitle": "Revenue Analyst", "department": "Accounting", "accountEnabled": true, "createdDateTime": "2026-10-09T20:58:42Z", "usageLocation": "US"}, {"id": "c9bebe97-6c1b-4bfb-933c-fe84a8ae465e", "displayName": "Omar Haddad", "userPrincipalName": "omar.haddad@NorthwindParking.onmicrosoft.com", "jobTitle": "Lot Attendant", "department": "Operations", "accountEnabled": true, "createdDateTime": "2026-10-09T20:58:42Z", "usageLocation": "US"}, {"id": "5d06498e-33a4-4746-b5ef-fcefb4439121", "displayName": "Emma Clarke", "userPrincipalName": "emma.clarke@NorthwindParking.onmicrosoft.com", "jobTitle": "Marketing Coordinator", "department": "Marketing", "accountEnabled": true, "createdDateTime": "2026-10-09T20:58:41Z", "usageLocation": "US"}, {"id": "30fa26d6-ce74-46cb-9e00-159fed527c60", "displayName": "Maria Santos", "userPrincipalName": "maria.santos@NorthwindParking.onmicrosoft.com", "jobTitle": "Accounts Payable Clerk", "department": "Accounting", "accountEnabled": true, "createdDateTime": "2026-10-09T20:58:41Z", "usageLocation": "US"}, {"id": "f0e1c46b-04c6-4e2f-8c2a-2ee7d64907c8", "displayName": "Alex Rivera", "userPrincipalName": "alex.rivera@NorthwindParking.onmicrosoft.com", "jobTitle": "Customer Service Representative", "department": "Customer Service", "accountEnabled": true, "createdDateTime": "2026-10-09T20:58:40Z", "usageLocation": "US"}, {"id": "abbbb0d2-a998-426b-8d31-2026e6dc6201", "displayName": "Mei Chen", "userPrincipalName": "mchen@NorthwindParking.onmicrosoft.com", "jobTitle": "Payroll Clerk", "department": "Accounting", "accountEnabled": true, "createdDateTime": "2026-10-09T20:58:40Z", "usageLocation": "US"}, {"id": "302a08b1-1ea8-45ac-8e56-95c5752af435", "displayName": "Raj Patel", "userPrincipalName": "rpatel@NorthwindParking.onmicrosoft.com", "jobTitle": "Parking Enforcement Officer", "department": "Operations", "accountEnabled": true, "createdDateTime": "2026-10-09T20:58:39Z", "usageLocation": "US"}, {"id": "eabb4284-1ebd-4688-9334-fe6a2bf58881", "displayName": "Sophie Baker", "userPrincipalName": "sbaker@NorthwindParking.onmicrosoft.com", "jobTitle": "Billing Specialist", "department": "Accounting", "accountEnabled": true, "createdDateTime": "2026-10-09T20:58:39Z", "usageLocation": "US"}, {"id": "4de26d55-a0ad-487f-837c-3d6bec07fce6", "displayName": "Dennis Okafor", "userPrincipalName": "dennis@NorthwindParking.onmicrosoft.com", "jobTitle": "Facilities Coordinator", "department": "Facilities", "accountEnabled": true, "createdDateTime": "2026-10-09T20:58:38Z", "usageLocation": "US"}, {"id": "37a5cc66-347e-4665-a51c-b2a9e6070222", "displayName": "Jordan Lee", "userPrincipalName": "jlee@NorthwindParking.onmicrosoft.com", "jobTitle": "Lead Lot Attendant", "department": "Operations", "accountEnabled": true, "createdDateTime": "2026-10-09T20:58:38Z", "usageLocation": "US"}, {"id": "12c50eb5-9ea7-4136-800b-e406f3992320", "displayName": "Kevin Brooks", "userPrincipalName": "kevin@NorthwindParking.onmicrosoft.com", "jobTitle": "Operations Supervisor", "department": "Operations", "accountEnabled": true, "createdDateTime": "2026-10-09T20:58:37Z", "usageLocation": "US"}, {"id": "8a590663-09f2-4ee8-ab1a-6195ca3943f9", "displayName": "Marcus Webb", "userPrincipalName": "marcus@NorthwindParking.onmicrosoft.com", "jobTitle": "Senior Accountant", "department": "Accounting", "accountEnabled": true, "createdDateTime": "2026-10-09T20:58:37Z", "usageLocation": "US"}, {"id": "ac386808-2c01-48f3-b643-8ce120a897c8", "displayName": "Taylor Garcia", "userPrincipalName": "tgarcia@NorthwindParking.onmicrosoft.com", "jobTitle": "Office Manager", "department": "Administration", "accountEnabled": true, "createdDateTime": "2026-10-09T20:58:36Z", "usageLocation": "US"}, {"id": "e87b7115-3300-4fb2-9677-41cedc7a4d7b", "displayName": "Aditya Shah", "userPrincipalName": "AdityaShah@NorthwindParking.onmicrosoft.com", "jobTitle": null, "department": null, "accountEnabled": true, "createdDateTime": "2026-10-09T20:32:32Z", "usageLocation": "US"}], "t": 3.1}
+id: 7
+
+event: tool_call
+data: {"tool": "users.search", "args": {"name": "Nair"}, "ok": true, "error": null, "result": [], "t": 3.1}
+id: 8
+
+event: tool_call
+data: {"tool": "subscribedSkus.list", "args": {}, "ok": true, "error": null, "result": [{"skuId": "cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46", "skuPartNumber": "SPB", "enabled": 25, "consumed": 25, "available": 0}], "t": 3.1}
+id: 9
+
+event: finding
+data: {"text": "No existing/disabled Priya Nair; peer = Marcus Webb (Senior Accountant, Accounting). SPB: 25/25 consumed, 0 free.", "t": 6.5}
+id: 10
+
+event: tool_call
+data: {"tool": "users.memberOf", "args": {"user_id": "8a590663-09f2-4ee8-ab1a-6195ca3943f9"}, "ok": true, "error": null, "result": [{"id": "97fbfe65-a8c2-4094-bc34-e1842aa3d038", "displayName": "Northwind Parking", "kind": "m365", "mail": "NorthwindParking@NorthwindParking.onmicrosoft.com", "roleAssignable": false}, {"id": "a55f62f7-a1fe-4314-8d61-88d40f8cfd54", "displayName": "Accounting", "kind": "m365", "mail": "accounting-team@NorthwindParking.onmicrosoft.com", "roleAssignable": false}, {"id": "48297cf8-723a-4826-a8b0-199373841df5", "displayName": "Finance Files", "kind": "security", "mail": null, "roleAssignable": false}, {"id": "d510a287-dc02-460c-86b5-eea9cc59a8dc", "displayName": "RDS-Users", "kind": "security", "mail": null, "roleAssignable": false}, {"id": "4a3231a3-7eb7-4ec4-b504-f92bfec21ec7", "displayName": "VPN-Users", "kind": "security", "mail": null, "roleAssignable": false}, {"id": "a443a24b-ca1f-41be-b888-61c82667a64a", "displayName": "accounting-announce", "kind": "distribution_list", "mail": "accounting-announce@NorthwindParking.onmicrosoft.com", "roleAssignable": false}], "t": 6.6}
+id: 11
+
+event: tool_call
+data: {"tool": "users.licenseDetails", "args": {"user_id": "8a590663-09f2-4ee8-ab1a-6195ca3943f9"}, "ok": true, "error": null, "result": [{"skuId": "cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46", "skuPartNumber": "SPB"}], "t": 6.7}
+id: 12
+
+event: tool_call
+data: {"tool": "users.get", "args": {"user_id": "8a590663-09f2-4ee8-ab1a-6195ca3943f9"}, "ok": true, "error": null, "result": {"@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users(id,displayName,userPrincipalName,jobTitle,department,accountEnabled,createdDateTime,usageLocation)/$entity", "id": "8a590663-09f2-4ee8-ab1a-6195ca3943f9", "displayName": "Marcus Webb", "userPrincipalName": "marcus@NorthwindParking.onmicrosoft.com", "jobTitle": "Senior Accountant", "department": "Accounting", "accountEnabled": true, "createdDateTime": "2026-10-09T20:58:37Z", "usageLocation": "US", "signInActivity": {"lastSignInDateTime": null, "lastNonInteractiveSignInDateTime": null, "lastSuccessfulSignInDateTime": null}, "manager": {"id": "ac386808-2c01-48f3-b643-8ce120a897c8", "displayName": "Taylor Garcia", "userPrincipalName": "tgarcia@NorthwindParking.onmicrosoft.com"}}, "t": 7.2}
+id: 13
+
+event: finding
+data: {"text": "Marcus holds SPB (Business Premium), not the default Business Basic. To match him we need to buy 1 SPB seat.", "t": 22.9}
+id: 14
+
+event: finding
+data: {"text": "Marcus's groups: Accounting (M365) + Finance Files (security) \u2192 mirror; RDS-Users, VPN-Users, accounting-announce DL \u2192 technician; Northwind Parking automatic.", "t": 22.9}
+id: 15
+
+event: finding
+data: {"text": "UPN formats are mixed (first.last, flast, first, FirstLast). Most recent named users use first.last, so proposing priya.nair@ for the requester to confirm.", "t": 22.9}
+id: 16
+
+event: lint_result
+data: {"attempt": 1, "ok": true, "problems": [], "t": 48.9}
+id: 17
+
+event: plan
+data: {"plan": {"intent": "user.onboard", "summary": "I couldn't change anything here, so this is a plan to set up Priya Nair in Accounting before her Monday start (2026-10-12), copying Marcus Webb's setup. He's a Senior Accountant and reports to Taylor Garcia, the requester. 1) Create Priya's account (proposed address priya.nair@, needs confirming). 2) Buy 1 Microsoft 365 Business Premium seat (SPB), which is what Marcus has. It covers Office and Teams, and all 25 current seats are in use. 3) Add Priya to the Accounting M365 group and the Finance Files security group. 4) Assign her license early Monday morning. 5) Create a temporary access pass that only starts working Monday morning. 6) Send Taylor a one-time link with sign-in steps, a tip to use the Outlook mobile app, and a note about shared files. A technician needs to handle three things: hosted desktop access (RDS-Users), VPN access (VPN-Users, needs Kevin's approval), and the accounting-announce distribution list.", "assumptions": ["The peer 'Marcus' is Marcus Webb (marcus@), the only Marcus in the directory. He's a Senior Accountant in Accounting, which matches the ticket.", "'office + teams' is covered by copying Marcus's SPB license; no extra apps are needed.", "The 'Northwind Parking' org-wide group isn't copied because every user is added to it automatically.", "The seat-holder accounts are an intentional license reserve and are left alone.", "The US time zone is assumed for start-of-day timings."], "steps": [{"id": "create_user", "depends_on": [], "rationale": "No existing or disabled account for Priya Nair (searched 'Priya' and 'Nair'). Create her in Accounting with usageLocation US so a license can be assigned later.", "expected": {"userPrincipalName": "priya.nair@NorthwindParking.onmicrosoft.com", "usageLocation": "US", "department": "Accounting", "accountEnabled": true}, "risk_class": "write.reversible", "action": "user.create", "params": {"displayName": "Priya Nair", "givenName": "Priya", "surname": "Nair", "userPrincipalName": "priya.nair@NorthwindParking.onmicrosoft.com", "mailNickname": "priya.nair", "department": "Accounting", "jobTitle": null, "usageLocation": "US", "accountEnabled": true}}, {"id": "purchase_seat", "depends_on": [], "rationale": "Marcus has SPB (Microsoft 365 Business Premium), which covers the Office and Teams the ticket asks for. All 25 SPB seats are used and 0 are free. The seat-holder accounts are an intentional reserve and are not touched.", "expected": {"sku": "SPB", "enabled": 26, "available_min": 1}, "risk_class": "spend", "action": "license.purchase", "params": {"skuId": "cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46", "skuPartNumber": "SPB", "quantity": 1}}, {"id": "add_accounting", "depends_on": ["create_user"], "rationale": "Copying Marcus's Accounting M365 group (team mailbox, Teams and files).", "expected": {"member_of": "Accounting"}, "risk_class": "write.reversible", "action": "group.addMember", "params": {"groupId": "a55f62f7-a1fe-4314-8d61-88d40f8cfd54", "userId": "$ref:create_user.output.id", "groupName": "Accounting"}}, {"id": "add_finance_files", "depends_on": ["create_user"], "rationale": "Copying Marcus's Finance Files security group (not mail-enabled, so Graph can change it).", "expected": {"member_of": "Finance Files"}, "risk_class": "write.reversible", "action": "group.addMember", "params": {"groupId": "48297cf8-723a-4826-a8b0-199373841df5", "userId": "$ref:create_user.output.id", "groupName": "Finance Files"}}, {"id": "license_on_start", "depends_on": ["create_user", "purchase_seat"], "rationale": "She starts in the future (Monday 2026-10-12), so the SPB license is assigned early on her start date, before she first signs in.", "expected": {"user_has_sku": "SPB", "on": "2026-10-12"}, "risk_class": "write.reversible", "action": "followup.schedule", "params": {"kind": "license.assign", "runAt": "2026-10-12T11:00:00Z", "userId": "$ref:create_user.output.id", "skuId": "cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46", "skuPartNumber": "SPB"}}, {"id": "tap", "depends_on": ["create_user"], "rationale": "First sign-in uses a temporary access pass (no password is ever set). It starts Monday morning and lasts the maximum 8 hours so it's valid on day one.", "expected": {"tap_active": true, "startDateTime": "2026-10-12T12:00:00Z"}, "risk_class": "security.credential", "action": "tap.create", "params": {"userId": "$ref:create_user.output.id", "startDateTime": "2026-10-12T12:00:00Z", "lifetimeInMinutes": 480, "isUsableOnce": false}}, {"id": "send_link", "depends_on": ["tap", "add_accounting", "add_finance_files"], "rationale": "Send the sign-in details to the approved requester (who is also the peer's manager) through a one-time link, never in plain text.", "expected": {"message_sent": true, "to": "tgarcia@NorthwindParking.onmicrosoft.com"}, "risk_class": "security.credential", "action": "link.sendOneTime", "params": {"to": "tgarcia@NorthwindParking.onmicrosoft.com", "userId": "$ref:create_user.output.id", "tap": "$ref:tap.output.tap", "includes": ["email_access_steps", "outlook_mobile_app_tip", "file_share_note"], "note": "Sign-in details for Priya Nair (start Monday 2026-10-12). The temporary access pass works from Monday morning for 8 hours. Use the Outlook mobile app rather than the built-in iOS Mail app."}}], "needs_technician": [{"item": "Hosted desktop NW-TS-01 access for Priya Nair (Marcus is in RDS-Users, d510a287-dc02-460c-86b5-eea9cc59a8dc)", "reason": "client_facts.group_handling: RDS-Users means hosted desktop access and is handled by a technician, not copied automatically."}, {"item": "Meraki client VPN access for Priya Nair (Marcus is in VPN-Users, 4a3231a3-7eb7-4ec4-b504-f92bfec21ec7)", "reason": "client_facts.group_handling: VPN access is handled by a technician and needs approval from the VPN approver, kevin@NorthwindParking.onmicrosoft.com."}, {"item": "Add Priya Nair to the accounting-announce distribution list (accounting-announce@NorthwindParking.onmicrosoft.com)", "reason": "Distribution lists can't be changed through Graph."}], "confirm_on_approval": [{"key": "upn_format", "question": "Should Priya's email be priya.nair@NorthwindParking.onmicrosoft.com?", "proposed": "priya.nair@NorthwindParking.onmicrosoft.com", "evidence": "No email format is documented and the directory is mixed: first.last (luis.ortega, grace.kim, maria.santos, omar.haddad, emma.clarke, alex.rivera), first initial + last (mchen, sbaker, rpatel, jlee, tgarcia), first name only (marcus, dennis, kevin), FirstLast (AdityaShah). The most recently created named users use first.last."}, {"key": "license_purchase", "question": "OK to buy 1 more Microsoft 365 Business Premium (SPB) seat for Priya, to match Marcus?", "proposed": "Buy 1 SPB seat (skuId cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46)", "evidence": "Marcus's only license is SPB. The tenant's SPB pool is 25 enabled, 25 used, 0 free. The client default is Business Basic, but that doesn't include the desktop Office apps the ticket asks for."}, {"key": "start_date", "question": "Is Priya's start date Monday 2026-10-12?", "proposed": "2026-10-12; license assigned at 11:00 UTC and access pass valid from 12:00 UTC for 8 hours", "evidence": "The ticket says 'starting monday'. Today is Saturday 2026-10-10."}], "questions_for_requester": ["What is Priya's job title? It's not in the ticket, so the account will be created without one.", "What time zone and start time does Priya begin on Monday? The access pass is set to start at 12:00 UTC (08:00 US Eastern) and lasts 8 hours.", "Does Priya need hosted desktop (NW-TS-01) and VPN access like Marcus? VPN access also needs Kevin's approval."], "out_of_scope_requests": [], "escalate": false, "escalation_reason": null}, "usage": {"requests": 4, "tool_calls": 12, "input_tokens": 62376, "output_tokens": 5415, "cache_read_tokens": 31491}}
+id: 18
+
+event: state
+data: {"from": "INVESTIGATING", "to": "PLAN_PROPOSED"}
+id: 19
+
+event: gate_decision
+data: {"step_id": "create_user", "action": "user.create", "decision": "auto", "rule_id": "risk.write.reversible", "reason": "write.reversible: reversible, within the playbook", "risk_class": "write.reversible"}
+id: 20
+
+event: gate_decision
+data: {"step_id": "purchase_seat", "action": "license.purchase", "decision": "approve", "rule_id": "risk.spend", "reason": "spend always needs a person's approval", "risk_class": "spend"}
+id: 21
+
+event: gate_decision
+data: {"step_id": "add_accounting", "action": "group.addMember", "decision": "auto", "rule_id": "risk.write.reversible", "reason": "write.reversible: reversible, within the playbook", "risk_class": "write.reversible"}
+id: 22
+
+event: gate_decision
+data: {"step_id": "add_finance_files", "action": "group.addMember", "decision": "auto", "rule_id": "risk.write.reversible", "reason": "write.reversible: reversible, within the playbook", "risk_class": "write.reversible"}
+id: 23
+
+event: gate_decision
+data: {"step_id": "license_on_start", "action": "followup.schedule", "decision": "auto", "rule_id": "risk.write.reversible", "reason": "write.reversible: reversible, within the playbook", "risk_class": "write.reversible"}
+id: 24
+
+event: gate_decision
+data: {"step_id": "tap", "action": "tap.create", "decision": "approve", "rule_id": "risk.security.credential", "reason": "security.credential always needs a person's approval", "risk_class": "security.credential"}
+id: 25
+
+event: gate_decision
+data: {"step_id": "send_link", "action": "link.sendOneTime", "decision": "auto", "rule_id": "risk.none", "reason": "none: reversible, within the playbook (the plan said security.credential; the catalogue says none)", "risk_class": "none"}
+id: 26
+
+event: state
+data: {"from": "PLAN_PROPOSED", "to": "PLAN_CHECKED"}
+id: 27
+
+event: state
+data: {"from": "PLAN_CHECKED", "to": "AWAITING_APPROVAL", "steps": ["purchase_seat", "tap"]}
+id: 28
+
+event: approval
+data: {"by": "tgarcia@northwindparking.onmicrosoft.com", "decision": "approve", "answers": {"upn_format": "priya.nair"}, "released_hold": false}
+id: 29
+
+event: state
+data: {"from": "AWAITING_APPROVAL", "to": "EXECUTING"}
+id: 30
+
+event: step_started
+data: {"step_id": "create_user", "action": "user.create", "params": {"displayName": "Priya Nair", "givenName": "Priya", "surname": "Nair", "userPrincipalName": "priya.nair@NorthwindParking.onmicrosoft.com", "mailNickname": "priya.nair", "department": "Accounting", "jobTitle": null, "usageLocation": "US", "accountEnabled": true}, "snapshot": {"exists": false}, "t": 0.4}
+id: 31
+
+event: step_verified
+data: {"step_id": "create_user", "action": "user.create", "output": {"id": "3316874f-0f06-406c-8d28-e1a14002d4a0", "userPrincipalName": "priya.nair@NorthwindParking.onmicrosoft.com"}, "observed": {"exists": true, "userPrincipalName": "priya.nair@NorthwindParking.onmicrosoft.com", "displayName": "Priya Nair", "usageLocation": "US", "department": "Accounting", "jobTitle": null, "accountEnabled": true}, "unchecked": [], "t": 1.3}
+id: 32
+
+event: step_started
+data: {"step_id": "purchase_seat", "action": "license.purchase", "params": {"skuId": "cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46", "skuPartNumber": "SPB", "quantity": 1}, "snapshot": {"seatHolderHasSku": true}, "t": 1.4}
+id: 33
+
+event: step_verified
+data: {"step_id": "purchase_seat", "action": "license.purchase", "output": {"skuId": "cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46", "quantity": 1, "seatFrom": "seat-holder", "mock": "pax8"}, "observed": {"seatHolderHasSku": false}, "unchecked": ["sku", "enabled", "available_min"], "t": 10.8}
+id: 34
+
+event: step_started
+data: {"step_id": "add_accounting", "action": "group.addMember", "params": {"groupId": "a55f62f7-a1fe-4314-8d61-88d40f8cfd54", "userId": "3316874f-0f06-406c-8d28-e1a14002d4a0", "groupName": "Accounting"}, "snapshot": {"isMember": false}, "t": 10.9}
+id: 35
+
+event: step_verified
+data: {"step_id": "add_accounting", "action": "group.addMember", "output": {"groupId": "a55f62f7-a1fe-4314-8d61-88d40f8cfd54", "userId": "3316874f-0f06-406c-8d28-e1a14002d4a0"}, "observed": {"isMember": true, "groupId": "a55f62f7-a1fe-4314-8d61-88d40f8cfd54"}, "unchecked": ["member_of"], "t": 17.8}
+id: 36
+
+event: step_started
+data: {"step_id": "add_finance_files", "action": "group.addMember", "params": {"groupId": "48297cf8-723a-4826-a8b0-199373841df5", "userId": "3316874f-0f06-406c-8d28-e1a14002d4a0", "groupName": "Finance Files"}, "snapshot": {"isMember": false}, "t": 17.9}
+id: 37
+
+event: step_verified
+data: {"step_id": "add_finance_files", "action": "group.addMember", "output": {"groupId": "48297cf8-723a-4826-a8b0-199373841df5", "userId": "3316874f-0f06-406c-8d28-e1a14002d4a0"}, "observed": {"isMember": true, "groupId": "48297cf8-723a-4826-a8b0-199373841df5"}, "unchecked": ["member_of"], "t": 32.6}
+id: 38
+
+event: step_started
+data: {"step_id": "license_on_start", "action": "followup.schedule", "params": {"kind": "license.assign", "runAt": "2026-10-12T11:00:00Z", "userId": "3316874f-0f06-406c-8d28-e1a14002d4a0", "skuId": "cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46", "skuPartNumber": "SPB"}, "snapshot": {}, "t": 32.6}
+id: 39
+
+event: step_verified
+data: {"step_id": "license_on_start", "action": "followup.schedule", "output": {"followupId": 1, "kind": "license.assign", "runAt": "2026-10-12T11:00:00+00:00"}, "observed": {"exists": true, "status": "scheduled"}, "unchecked": ["user_has_sku", "on"], "t": 32.6}
+id: 40
+
+event: step_started
+data: {"step_id": "tap", "action": "tap.create", "params": {"userId": "3316874f-0f06-406c-8d28-e1a14002d4a0", "startDateTime": "2026-10-12T12:00:00Z", "lifetimeInMinutes": 480, "isUsableOnce": false}, "snapshot": {"taps": 0}, "t": 33.0}
+id: 41
+
+event: step_verified
+data: {"step_id": "tap", "action": "tap.create", "output": {"id": "aa839125-bc9a-4a81-9032-c4bdb616702d", "userId": "3316874f-0f06-406c-8d28-e1a14002d4a0", "startDateTime": "2026-10-12T12:00:00+00:00", "lifetimeInMinutes": 480, "isUsableOnce": false, "expiresAt": "2026-10-12T20:00:00+00:00"}, "observed": {"exists": true, "usability": "NotYetValid"}, "unchecked": ["tap_active", "startDateTime"], "t": 34.4}
+id: 42
+
+event: step_started
+data: {"step_id": "send_link", "action": "link.sendOneTime", "params": {"to": "tgarcia@NorthwindParking.onmicrosoft.com", "userId": "3316874f-0f06-406c-8d28-e1a14002d4a0", "tap": "$ref:tap.output.tap", "includes": ["email_access_steps", "outlook_mobile_app_tip", "file_share_note"], "note": "Sign-in details for Priya Nair (start Monday 2026-10-12). The temporary access pass works from Monday morning for 8 hours. Use the Outlook mobile app rather than the built-in iOS Mail app."}, "snapshot": {}, "t": 34.4}
+id: 43
+
+event: step_verified
+data: {"step_id": "send_link", "action": "link.sendOneTime", "output": {"linkId": 1, "to": "tgarcia@NorthwindParking.onmicrosoft.com", "expiresAt": "2026-10-12T20:00:00+00:00"}, "observed": {"exists": true, "viewed": false}, "unchecked": ["message_sent", "to"], "t": 34.4}
+id: 44
+
+event: state
+data: {"from": "EXECUTING", "to": "CLOSING"}
+id: 45
+
+event: state
+data: {"from": "CLOSING", "to": "DONE"}
+id: 46
+
+event: step_started
+data: {"step_id": "license_on_start-run", "action": "license.assign", "params": {"userId": "3316874f-0f06-406c-8d28-e1a14002d4a0", "skuId": "cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46", "skuPartNumber": "SPB"}, "snapshot": {"skus": []}, "t": 1.1}
+id: 47
+
+event: step_verified
+data: {"step_id": "license_on_start-run", "action": "license.assign", "output": {"id": "3316874f-0f06-406c-8d28-e1a14002d4a0", "skuId": "cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46"}, "observed": {"hasSku": true, "skuId": "cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46"}, "unchecked": [], "t": 17.9}
+id: 48
+
+event: end
+data: {"state": "DONE", "last_seq": 48}
+
