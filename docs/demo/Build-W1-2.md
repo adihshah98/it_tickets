@@ -164,13 +164,13 @@ it_tickets/
 ### Day 8. Close-out
 
 - `links.py`: the TAP is Fernet-encrypted and shown once, then the record is destroyed. (Done: Day 6 wipes it on reveal, and Day 7 built the page with the TAP and the sign-in steps.)
-- `scanner.py`: regexes for TAP-like strings, passwords and tokens, plus the actual TAP values held for the run. Every outbound text goes through it; a hit blocks the send and emits an event.
-- `closeout.py`:
+- (Done, see [Build-Day8.md](Build-Day8.md).) `scanner.py`: regexes for TAP-like strings, passwords and tokens, plus the actual TAP values held for the run. Every outbound text goes through it; a hit blocks the send and emits an event.
+- (Done.) The close-out is split into `execution/dod.py` (the probes) and `tech/closeout.py` (orchestration); a failed DoD escalates the run (`kind="dod"`):
   - the DoD probes from `user.onboard.yaml` (`user_exists`, usageLocation, `user_in_groups`, `tap_active`, license or follow-up, `needs_technician_listed`);
   - Sonnet (`claude-sonnet-5-5`) drafts the reply to Taylor (link, Outlook mobile tip) and the PSA note;
   - a time entry ("AI Automation", actual duration).
-- Each close-out item is shown in the workspace.
-- Tests: the scanner blocks a draft containing the TAP, and a DoD probe fails on a missing group.
+- Each close-out item is shown in the workspace. (Done. The manual UI walkthrough is still pending.)
+- Tests (done): the scanner blocks a draft containing the TAP, and a DoD probe fails on a missing group.
 
 ### Day 9. Speed and robustness
 

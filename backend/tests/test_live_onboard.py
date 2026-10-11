@@ -38,6 +38,12 @@ async def test_priya_onboarding_end_to_end():
 
         assert await runner.approve(rt, run_id, by=taylor, answers={"upn_format": "priya.nair"}) == RunState.DONE
 
+        checks = [e.payload for e in store.events_of(run_id, "done_check")]
+        assert checks and all(c["ok"] for c in checks), checks
+        reply = next(e.payload for e in store.events_of(run_id, "message_sent") if e.payload["kind"] == "reply")
+        assert "{{link}}" in reply["text"] and "outlook" in reply["text"].lower()
+        assert store.events_of(run_id, "time_entry")
+
         g = rt.graph
         priya = await g.get(f"/users/priya.nair@{settings.domain}", params={"$select": "id,usageLocation"})
         assert priya["usageLocation"] == "US"
