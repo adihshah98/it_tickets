@@ -51,7 +51,7 @@ async def test_priya_onboarding_end_to_end():
         run_id = store.create_run(store.create_ticket(TICKET, taylor).id).id
         assert await runner.start(rt, run_id, TICKET, taylor) == RunState.AWAITING_APPROVAL
         decisions = {e.payload["action"]: e.payload["decision"] for e in store.events_of(run_id, "gate_decision")}
-        assert "license.purchase" in decisions and "tap.create" in decisions, f"plan lacks purchase/TAP steps: {decisions}"
+        assert "license.purchase" in decisions and "tap.create" in decisions, f"plan lacks purchase/TAP: {decisions}"
         assert decisions["license.purchase"] == decisions["tap.create"] == "approve", decisions
 
         final = await runner.approve(rt, run_id, by=taylor, answers={"upn_format": "priya.nair"})
