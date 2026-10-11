@@ -6,7 +6,7 @@
 import { useState } from "react";
 import { ApiError, runNow } from "@/lib/api";
 import type { StepRun } from "@/lib/run";
-import type { Plan, Snapshot } from "@/lib/types";
+import type { BlockedMessage, DoneCheck, OutboundMessage, Plan, Snapshot, TimeEntry as TimeEntryT } from "@/lib/types";
 import { KeyValues, Section, when } from "./ui";
 
 export function Followups({ snap, runs, onStarted }: {
@@ -100,6 +100,57 @@ export function Outcome({ outcome }: { outcome: NonNullable<Snapshot["outcome"]>
       {kind && <p className="font-mono text-xs text-neutral-500">{kind}</p>}
       {reason && <p className="text-sm">{reason}</p>}
       {Object.keys(rest).length > 0 && <div className="mt-2"><KeyValues values={rest} /></div>}
+    </Section>
+  );
+}
+
+export function DefinitionOfDone({ checks }: { checks: DoneCheck[] }) {
+  const met = checks.every((c) => c.ok);
+  return (
+    <Section title="Definition of done" tone={met ? "good" : "bad"} aside={<span className="text-xs text-neutral-500">checked live in Graph</span>}>
+      <ul className="space-y-1 text-sm">
+        {checks.map((c) => (
+          <li key={c.probe} className="flex gap-2">
+            <span className={c.ok ? "text-emerald-700" : "text-red-700"}>{c.ok ? "✔" : "✖"}</span>
+            <span className="font-mono">{c.probe}</span>
+            <span className="text-neutral-500">{c.detail}</span>
+          </li>
+        ))}
+      </ul>
+    </Section>
+  );
+}
+
+const MESSAGE_TITLE = { reply: "Reply to requester", psa_note: "PSA note" } as const;
+
+export function Messages({ messages, blocked }: { messages: OutboundMessage[]; blocked: BlockedMessage[] }) {
+  return (
+    <>
+      {blocked.map((b) => (
+        <Section key={`blocked-${b.kind}`} title={`${MESSAGE_TITLE[b.kind]}: not sent`} tone="bad">
+          <p className="text-sm">
+            {b.reason === "secret"
+              ? `The secret scanner blocked it (${b.hits.map((h) => h.kind).join(", ")}). Nothing was sent.`
+              : `Held: ${b.detail ?? "the definition of done isn't met"}.`}
+          </p>
+        </Section>
+      ))}
+      {messages.map((m) => (
+        <Section key={m.kind} title={MESSAGE_TITLE[m.kind]}>
+          {m.to && <p className="text-xs text-neutral-500">To {m.to}</p>}
+          {m.subject && <p className="mb-2 font-medium">{m.subject}</p>}
+          <p className="whitespace-pre-wrap text-sm">{m.text}</p>
+        </Section>
+      ))}
+    </>
+  );
+}
+
+export function TimeEntry({ entry }: { entry: TimeEntryT }) {
+  return (
+    <Section title="Time entry">
+      <p className="text-sm"><span className="font-mono">{entry.work_type}</span> · {entry.minutes} min</p>
+      <p className="text-xs text-neutral-500">working time, excluding time waiting for an approver</p>
     </Section>
   );
 }

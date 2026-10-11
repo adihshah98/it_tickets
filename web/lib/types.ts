@@ -60,6 +60,13 @@ export interface Step {
   error?: string;
 }
 
+export interface DoneCheck { probe: string; ok: boolean; detail: string }
+export interface OutboundMessage { kind: "reply" | "psa_note"; to: string | null; subject: string | null; text: string }
+export interface BlockedMessage {
+  kind: "reply" | "psa_note"; reason: "secret" | "dod"; hits: { kind: string; start: number }[]; detail?: string;
+}
+export interface TimeEntry { work_type: string; minutes: number; started_at: string; ended_at: string }
+
 export interface Snapshot {
   run: { id: number; state: RunState; created_at: string; updated_at: string };
   ticket: { id: number; text: string; from: string };
@@ -73,6 +80,7 @@ export interface Snapshot {
   outcome: ({ from: RunState; to: RunState; kind?: string; reason?: string } & Record<string, unknown>) | null;
   followups: { id: number; step_id: string; kind: string; run_at: string; status: string }[];
   links: { id: number; step_id: string; to: string; expires_at: string; viewed_at: string | null; url: string | null }[];
+  closeout: { checks: DoneCheck[]; messages: OutboundMessage[]; blocked: BlockedMessage[]; time_entry: TimeEntry | null };
 }
 
 export interface RunSummary {

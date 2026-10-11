@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { answersFor, initialView, reduce, type View } from "../lib/run";
+import { answersFor, initialView, reduce, REFRESH_ON, type View } from "../lib/run";
 import type { Confirmation, RunEvent } from "../lib/types";
 
 /** Parse a captured `curl -N /runs/{id}/events` body the way EventSource does (id / event / data lines). */
@@ -108,5 +108,13 @@ describe("answersFor", () => {
     expect(answersFor(confirmations, { upn_format: "  pnair ", start_date: " ", license_purchase: "no", other: "x" }))
       .toEqual({ upn_format: "pnair" });
     expect(answersFor(confirmations, { start_date: "2026-10-13" })).toEqual({ start_date: "2026-10-13" });
+  });
+});
+
+describe("close-out events", () => {
+  it("refresh the snapshot", () => {
+    for (const type of ["done_check", "message_sent", "message_blocked", "time_entry"]) {
+      expect(REFRESH_ON.has(type)).toBe(true);
+    }
   });
 });

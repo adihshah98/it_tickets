@@ -9,7 +9,7 @@ import { senderName } from "@/lib/samples";
 import { TERMINAL, type Snapshot } from "@/lib/types";
 import { useRun } from "@/lib/useRun";
 import { ApprovalCard, ApprovalSummary } from "./ApprovalCard";
-import { Followups, Links, NeedsTechnician, Outcome } from "./Closeout";
+import { DefinitionOfDone, Followups, Messages, TimeEntry, Links, NeedsTechnician, Outcome } from "./Closeout";
 import { Execution } from "./Execution";
 import { InvestigationLog } from "./InvestigationLog";
 import { PlanSteps } from "./PlanSteps";
@@ -78,6 +78,12 @@ export default function Workspace() {
       {snap.approval && <ApprovalSummary approval={snap.approval} />}
 
       {executed && <Execution steps={steps} runs={view.steps} secs={view.executeSecs} />}
+
+      {snap.closeout.checks.length > 0 && <DefinitionOfDone checks={snap.closeout.checks} />}
+      {(snap.closeout.messages.length > 0 || snap.closeout.blocked.length > 0) && (
+        <Messages messages={snap.closeout.messages} blocked={snap.closeout.blocked} />
+      )}
+      {snap.closeout.time_entry && <TimeEntry entry={snap.closeout.time_entry} />}
 
       {snap.followups.length > 0 && <Followups snap={snap} runs={view.steps} onStarted={reopen} />}
       {snap.links.length > 0 && <Links links={snap.links} />}
