@@ -282,3 +282,29 @@ async def test_sse_over_http_with_last_event_id(app, client, rt, gated, tenant):
     assert [int(e["id"]) for e in events[:-1]] == list(range(11, n + 1))
     events = parse_sse((await client.get(f"/runs/{run_id}/events?after={n}")).text)
     assert [e["event"] for e in events] == ["end"]
+
+
+# ------------------------------------------------------------------ close-out
+
+
+async def test_snapshot_shows_the_close_out_with_the_link_filled_in(app, client, rt, gated, tenant):
+    run_id = await approved_run(app, client, gated)
+
+    closeout = (await client.get(f"/runs/{run_id}")).json()["closeout"]
+    assert closeout["checks"] and all(c["ok"] for c in closeout["checks"])
+    assert closeout["time_entry"]["work_type"] == "AI Automation"
+    reply = next(m for m in closeout["messages"] if m["kind"] == "reply")
+    token = links.for_run(rt.store, run_id)[0].token
+    assert f"{ORIGIN}/l/{token}" in reply["text"] and "{{link}}" not in reply["text"]
+    assert token not in everything(rt, run_id)  # filled in when served, never stored
+
+    await client.post(f"/l/{token}/reveal")
+    closeout = (await client.get(f"/runs/{run_id}")).json()["closeout"]
+    reply = next(m for m in closeout["messages"] if m["kind"] == "reply")
+    assert token not in reply["text"] and "already opened" in reply["text"]
+
+
+async def test_snapshot_closeout_is_empty_before_execution(client, gated):
+    run_id = gated()
+    assert (await client.get(f"/runs/{run_id}")).json()["closeout"] == {
+        "checks": [], "messages": [], "blocked": [], "time_entry": None}

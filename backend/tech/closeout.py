@@ -107,3 +107,20 @@ async def close_out(store: Store, graph: GraphClient, run_id: int, plan: Plan, *
         "started_at": links.as_utc(states[0][1]).isoformat(), "ended_at": end.isoformat(),
     })
     return [p.probe for p in probes if not p.ok]
+
+
+def view(store: Store, run_id: int, link_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """The close-out as the workspace shows it. The reply's link placeholder becomes the link's URL while it's
+    unviewed, so the token is only ever in the served snapshot, never in an event."""
+    triage = store.last_event(run_id, "triage")
+    to = triage.payload["triage"]["requester"]["email"].casefold() if triage else ""
+    link = next((row for row in link_rows if row["to"].casefold() == to), None)
+    fill = (link["url"] or "(the one-time link, already opened)") if link else "(no link)"
+    entry = store.last_event(run_id, "time_entry")
+    return {
+        "checks": [e.payload for e in store.events_of(run_id, "done_check")],
+        "messages": [e.payload | {"text": e.payload["text"].replace(LINK_PLACEHOLDER, fill)}
+                     for e in store.events_of(run_id, "message_sent")],
+        "blocked": [e.payload for e in store.events_of(run_id, "message_blocked")],
+        "time_entry": entry.payload if entry else None,
+    }

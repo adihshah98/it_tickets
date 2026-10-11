@@ -4,7 +4,7 @@
 
     POST /tickets                    start a run (triage, investigation, gate) in the background
     GET  /runs                       recent runs, for the inbox
-    GET  /runs/{id}                  snapshot: the run as the workspace shows it, plus `last_seq`
+    GET  /runs/{id}                  snapshot: the run as the workspace shows it, its close-out, plus `last_seq`
     GET  /runs/{id}/events           SSE: history after Last-Event-ID (or ?after=), then live
     POST /runs/{id}/approval         approve (with confirm answers) or reject; executes in the background
     POST /runs/{id}/resume           carry on an execution a dead process left in EXECUTING
@@ -35,7 +35,7 @@ from fastapi.responses import JSONResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
 
-from tech import runner
+from tech import closeout, runner
 from tech.core.config import Settings
 from tech.core.store import Event, NotFound, RunState, Store
 from tech.execution import links, scheduler
@@ -192,6 +192,7 @@ def snapshot(store: Store, run_id: int, web_origin: str, domain: str) -> dict[st
         "followups": [{"id": f.id, "step_id": f.step_id, "kind": f.kind, "run_at": f.run_at.isoformat(),
                        "status": f.status} for f in scheduler.for_run(store, run_id)],
         "links": link_rows,
+        "closeout": closeout.view(store, run_id, link_rows),
     }
 
 
