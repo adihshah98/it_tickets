@@ -28,8 +28,11 @@ class FakeTenant:
         self.domain = domain
         self.users: dict[str, dict] = {}
         self.members: dict[str, set[str]] = {}
+        self.owners: dict[str, set[str]] = {}       # groupId (lower) -> owner user ids
         self.licenses: dict[str, set[str]] = {}
         self.taps: dict[str, list[dict]] = {}
+        self.mailbox: dict[str, dict] = {}          # uid -> mailboxSettings
+        self.rules: dict[str, list[dict]] = {}      # uid -> inbox messageRules
         self.calls: list[tuple[str, str, dict | None]] = []
         self._failures: list[list] = []
         self.stale_member_reads = 0  # memberOf reads that don't show new memberships yet (directory lag)
@@ -83,6 +86,25 @@ class FakeTenant:
                                   "properties: 'members'.")
             group.add(uid)
             return httpx.Response(204)
+        if m := re.fullmatch(r"/groups/([^/]+)/members/([^/]+)/\$ref", path):  # DELETE a member
+            group = self.members.setdefault(m.group(1).lower(), set())
+            if m.group(2) not in group:
+                return error(404, "does not exist or one of its queried reference-property objects are not present",
+                             "Request_ResourceNotFound")
+            group.discard(m.group(2))
+            return httpx.Response(204)
+        if m := re.fullmatch(r"/groups/([^/]+)/owners(/\$ref)?", path):
+            gid = m.group(1).lower()
+            if method == "GET":
+                ids = self.owners.get(gid, set())
+                return httpx.Response(200, json={"value": [{"id": u} for u in ids]})
+            uid = body["@odata.id"].rsplit("/", 1)[1]
+            owners = self.owners.setdefault(gid, set())
+            if uid in owners:
+                return error(400, "One or more added object references already exist for the following modified "
+                                  "properties: 'owners'.")
+            owners.add(uid)
+            return httpx.Response(204)
         m = re.fullmatch(r"/users/([^/]+)(/.*)?", path)
         if not m:
             return error(404, f"no route {method} {path}", "NotFound")
@@ -118,4 +140,18 @@ class FakeTenant:
                 return httpx.Response(201, json=tap | {"temporaryAccessPass": TAP_VALUE})
             case "GET", "/authentication/temporaryAccessPassMethods":
                 return httpx.Response(200, json={"value": self.taps.get(uid, [])})
+            case "POST", "/revokeSignInSessions":
+                user["signInSessionsValidFromDateTime"] = datetime.now(UTC).isoformat()
+                return httpx.Response(200, json={"value": True})
+            case "GET", "/mailboxSettings":
+                return httpx.Response(200, json=self.mailbox.get(uid, {}))
+            case "PATCH", "/mailboxSettings":
+                self.mailbox.setdefault(uid, {}).update(body)
+                return httpx.Response(200, json=self.mailbox[uid])
+            case "GET", "/mailFolders/inbox/messageRules":
+                return httpx.Response(200, json={"value": self.rules.get(uid, [])})
+            case "POST", "/mailFolders/inbox/messageRules":
+                rule = {"id": str(uuid.uuid4()), **body}
+                self.rules.setdefault(uid, []).append(rule)
+                return httpx.Response(201, json=rule)
         return error(404, f"no route {method} {path}", "NotFound")

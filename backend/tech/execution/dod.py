@@ -70,6 +70,26 @@ class DodContext:
             return None
         return {(g.get("displayName") or "").casefold() for r in reads for g in r["result"] or []}
 
+    def leaver(self) -> str | None:
+        """The leaver's id: the subject of the offboard writes (disable, revoke, mailbox...). The user
+        isn't created in this run, so it's taken from the step params, not a step_verified output."""
+        order = ["user.update", "sessions.revoke", "mailbox.autoReply", "mailbox.forwardRule",
+                 "group.removeMember"]
+        for action in order:
+            for step in self.plan.steps:
+                if step.action == action:
+                    return step.params.userId
+        return None
+
+    def removed_groups(self) -> dict[str, str]:
+        """groupId (lowercase) -> name, for every group.removeMember step in the plan."""
+        return {s.params.groupId.lower(): s.params.groupName or s.params.groupId
+                for s in self.plan.steps if s.action == "group.removeMember"}
+
+    def owned_to_transfer(self) -> dict[str, str]:
+        """groupId (lowercase) -> new owner id, for every group.addOwner step (ownership transfer)."""
+        return {s.params.groupId.lower(): s.params.userId for s in self.plan.steps if s.action == "group.addOwner"}
+
 
 Check = Callable[[DodContext, dict[str, Any]], Awaitable[Probe]]
 PROBES: dict[str, Check] = {}
@@ -164,6 +184,94 @@ async def needs_technician_listed(ctx: DodContext, args: dict[str, Any]) -> Prob
     if missing:
         return Probe("needs_technician_listed", False, f"not handed to a technician: {', '.join(missing)}")
     return Probe("needs_technician_listed", True, ", ".join(g.group for g in due) or "nothing outside Graph")
+
+
+# ------------------------------------------------------------------ offboarding probes (Tech.MD §6.2)
+
+NO_LEAVER = "no offboarding step names the leaver in this run"
+
+
+@probe("account_disabled")
+async def account_disabled(ctx: DodContext, args: dict[str, Any]) -> Probe:
+    if (leaver := ctx.leaver()) is None:
+        return Probe("account_disabled", False, NO_LEAVER)
+    user = await get_or_none(ctx.graph, f"/users/{leaver}", params={"$select": "id,accountEnabled"})
+    if user is None:
+        return Probe("account_disabled", False, "the leaver is not in the directory")
+    return Probe("account_disabled", user.get("accountEnabled") is False,
+                 "sign-in disabled" if user.get("accountEnabled") is False else "the account is still enabled")
+
+
+@probe("sessions_revoked")
+async def sessions_revoked(ctx: DodContext, args: dict[str, Any]) -> Probe:
+    if (leaver := ctx.leaver()) is None:
+        return Probe("sessions_revoked", False, NO_LEAVER)
+    user = await get_or_none(ctx.graph, f"/users/{leaver}", params={"$select": "id,signInSessionsValidFromDateTime"})
+    if user is None:
+        return Probe("sessions_revoked", False, "the leaver is not in the directory")
+    when = user.get("signInSessionsValidFromDateTime")
+    return Probe("sessions_revoked", when is not None,
+                 f"sessions revoked at {when}" if when else "sessions were never revoked")
+
+
+@probe("auto_reply_set")
+async def auto_reply_set(ctx: DodContext, args: dict[str, Any]) -> Probe:
+    if not any(s.action == "mailbox.autoReply" for s in ctx.plan.steps):
+        return Probe("auto_reply_set", True, "no auto-reply was requested")
+    if (leaver := ctx.leaver()) is None:
+        return Probe("auto_reply_set", False, NO_LEAVER)
+    settings = await get_or_none(ctx.graph, f"/users/{leaver}/mailboxSettings")
+    auto = (settings or {}).get("automaticRepliesSetting") or {}
+    on = auto.get("status") in {"scheduled", "alwaysEnabled"}
+    return Probe("auto_reply_set", on, f"auto-reply {auto.get('status')}" if on else "auto-reply is off")
+
+
+@probe("forward_rule_active")
+async def forward_rule_active(ctx: DodContext, args: dict[str, Any]) -> Probe:
+    if not any(s.action == "mailbox.forwardRule" for s in ctx.plan.steps):
+        return Probe("forward_rule_active", True, "no forwarding was requested")
+    if (leaver := ctx.leaver()) is None:
+        return Probe("forward_rule_active", False, NO_LEAVER)
+    rules = [r async for r in ctx.graph.list(f"/users/{leaver}/mailFolders/inbox/messageRules")]
+    forwards = [t["emailAddress"]["address"] for r in rules
+                for t in (r.get("actions") or {}).get("forwardTo") or []]
+    return Probe("forward_rule_active", bool(forwards),
+                 f"forwards to {', '.join(forwards)}" if forwards else "no forwarding rule is active")
+
+
+@probe("removed_from_groups")
+async def removed_from_groups(ctx: DodContext, args: dict[str, Any]) -> Probe:
+    if (leaver := ctx.leaver()) is None:
+        return Probe("removed_from_groups", False, NO_LEAVER)
+    if not (want := ctx.removed_groups()):
+        return Probe("removed_from_groups", True, "the plan removes no groups")
+    still_in = await member_group_ids(ctx.graph, leaver)
+    bad = [name for gid, name in want.items() if gid in still_in]
+    return Probe("removed_from_groups", not bad,
+                 f"still in {', '.join(bad)}" if bad else f"removed from all {len(want)}")
+
+
+@probe("ownership_transferred")
+async def ownership_transferred(ctx: DodContext, args: dict[str, Any]) -> Probe:
+    if not (want := ctx.owned_to_transfer()):
+        return Probe("ownership_transferred", True, "the plan transfers no ownership")
+    missing = []
+    for gid, new_owner in want.items():
+        owners = {o["id"].lower() async for o in ctx.graph.list(f"/groups/{gid}/owners", {"$select": "id"})}
+        if new_owner.lower() not in owners:
+            missing.append(gid)
+    return Probe("ownership_transferred", not missing,
+                 f"new owner missing on {', '.join(missing)}" if missing else f"transferred {len(want)}")
+
+
+@probe("followup_scheduled")
+async def followup_scheduled(ctx: DodContext, args: dict[str, Any]) -> Probe:
+    want = args.get("type", "license_review")
+    kinds = {"license_review": "license.review", "verify_new_method": "mfa.verifyNewMethod"}
+    kind = kinds.get(want, want)
+    due = [f for f in scheduler.for_run(ctx.store, ctx.run_id) if f.kind == kind and f.status == "scheduled"]
+    return Probe("followup_scheduled", bool(due),
+                 f"{kind} scheduled for {due[0].run_at:%Y-%m-%d}" if due else f"no {kind} follow-up scheduled")
 
 
 async def check(ctx: DodContext, playbook: Playbook, *, only: Collection[str] | None = None,
