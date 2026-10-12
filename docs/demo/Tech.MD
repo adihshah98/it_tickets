@@ -825,9 +825,13 @@ Week 3
 Week 4
 
 - Learning new playbooks
-- Resolving ticket with no priot info
+- Resolving ticket with no prior info
 
 Week 5 
 
 - PSA integration?
+- Expansions
+  - Pydantic-graph
+  - multi-tenant (so MSPs can have sep methods per customer)
+  - Jev for decisions?
 

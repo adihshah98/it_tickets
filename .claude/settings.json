@@ -27,7 +27,11 @@
       "Bash(bash /Users/aditya/.claude/plugins/cache/claude-plugins-official/superpowers/6.4.1/skills/subagent-driven-development/scripts/review-package docs/demo/Build-Day8.md 5e6a845 HEAD)",
       "Bash(bash /Users/aditya/.claude/plugins/cache/claude-plugins-official/superpowers/6.4.1/skills/subagent-driven-development/scripts/review-package docs/demo/Build-Day8.md 487f495 HEAD)",
       "Bash(bash /Users/aditya/.claude/plugins/cache/claude-plugins-official/superpowers/6.4.1/skills/subagent-driven-development/scripts/task-brief docs/demo/Build-Day8.md 5)",
-      "Bash(bash /Users/aditya/.claude/plugins/cache/claude-plugins-official/superpowers/6.4.1/skills/subagent-driven-development/scripts/review-package docs/demo/Build-Day8.md 888bb55 HEAD)"
+      "Bash(bash /Users/aditya/.claude/plugins/cache/claude-plugins-official/superpowers/6.4.1/skills/subagent-driven-development/scripts/review-package docs/demo/Build-Day8.md 888bb55 HEAD)",
+      "Bash(.venv/bin/python -m pytest)",
+      "Bash(git checkout *)",
+      "WebFetch(domain:ai.pydantic.dev)",
+      "WebFetch(domain:pydantic.dev)"
     ],
     "additionalDirectories": [
       "/Users/aditya/Desktop/it_tickets/docs/demo",
