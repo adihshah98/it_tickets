@@ -43,7 +43,7 @@ export const initialView: View = {
 /** Event types after which the snapshot is stale. */
 export const REFRESH_ON: ReadonlySet<string> = new Set([
   "state", "plan", "gate_decision", "approval", "step_verified", "step_failed", "link_viewed", "error", "end",
-  "done_check", "message_sent", "message_blocked", "time_entry",
+  "done_check", "message_sent", "message_blocked", "time_entry", "oob_confirmed",
 ]);
 
 type P = Record<string, unknown>;

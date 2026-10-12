@@ -16,6 +16,7 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from tech.core.models import GUID_RE
@@ -275,10 +276,48 @@ READS: dict[str, ReadFn] = {
 }
 
 
-async def run_read(graph: GraphClient, transcript: Transcript, tool: str, **args: Any) -> Any:
-    """Run a read tool and record the call and the IDs it observed. Graph errors are recorded, then re-raised."""
+# ------------------------------------------------------------------ the MFA demo's clean sign-in history
+#
+# On the demo tenant Dennis's account and Authenticator are days old and his sign-ins come from wherever the
+# presenter's phone is, so the investigator rightly reads them as a takeover (spike/results.md, finding 1).
+# For the happy path only, MFA_DEMO_CLEAN_USER names one user whose signIns.list is replaced by an
+# ordinary history: one city, one IP, daily sign-ins since the account was created, and today's MFA
+# failures from the same place (he lost his phone). Everything else, his auth methods included, stays real,
+# and every other user (the suspicious and service-account cases) reads real data.
+
+DEMO_CITY = {"city": "Sacramento", "country": "US", "ip": "98.42.17.203"}
+DEMO_APPS = ("Microsoft Teams", "Office 365 Exchange Online", "Microsoft Office")
+
+
+def _sign_in(when: datetime, app: str, error: int = 0, reason: str | None = None) -> dict:
+    return {"time": when.strftime("%Y-%m-%dT%H:%M:%SZ"), "app": app, "errorCode": error, "failureReason": reason,
+            "country": DEMO_CITY["country"], "city": DEMO_CITY["city"], "client": "Mobile Apps and Desktop clients",
+            "ip": DEMO_CITY["ip"]}
+
+
+async def demo_sign_ins(graph: GraphClient, user_id: str, top: int = 15, now: datetime | None = None) -> list[dict]:
+    """A clean 14-day history, never starting before the account existed (that would contradict users.get)."""
+    now = now or datetime.now(UTC)
+    user = await graph.get(f"/users/{user_id}", params={"$select": "id,createdDateTime"})
+    created = datetime.fromisoformat(user["createdDateTime"]) if user.get("createdDateTime") else now - timedelta(30)
+    lost = "Authentication failed during strong authentication request."
+    rows = [_sign_in(now - timedelta(minutes=95), "Microsoft Teams", 500121, lost),
+            _sign_in(now - timedelta(minutes=110), "Office 365 Exchange Online", 500121, lost)]
+    for day in range(1, 14):
+        when = (now - timedelta(days=day)).replace(hour=15, minute=30, second=0, microsecond=0)  # 8:30 Pacific
+        if when > created:
+            rows.append(_sign_in(when, DEMO_APPS[day % len(DEMO_APPS)]))
+    return rows[:max(1, min(top, 50))]
+
+
+async def run_read(graph: GraphClient, transcript: Transcript, tool: str, *, clean_sign_ins_for: str | None = None,
+                   **args: Any) -> Any:
+    """Run a read tool and record the call and the IDs it observed. Graph errors are recorded, then re-raised.
+    `clean_sign_ins_for` (the MFA demo setting) swaps in demo_sign_ins for that one user's signIns.list."""
+    demo = (tool == "signIns.list" and clean_sign_ins_for is not None
+            and str(args.get("user_id", "")).lower() == clean_sign_ins_for.lower())
     try:
-        result = await READS[tool](graph, **args)
+        result = await (demo_sign_ins(graph, **args) if demo else READS[tool](graph, **args))
     except GraphError as exc:
         transcript.record(tool, args, error=f"{exc.status} {exc.code}: {exc.message}")
         raise

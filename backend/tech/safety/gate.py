@@ -5,7 +5,9 @@ Rule order: requester hold, then never/catalogue blocks, then the autonomy level
 rules, then the blast-radius guard. The first rule that blocks wins; otherwise the strictest decision
 wins. Autonomy is per intent per client (§8): A1 blocks every write (a technician checklist), A2 leaves
 the risk-class rules in force, and A3 auto-approves reversible/revoke writes but never spend,
-data.access or security.credential. The no-playbook rules arrive in Week 4.
+data.access or security.credential. On an MFA reset a credential step is labelled `mfa.oob_required`: it
+still needs approval, and runner.accept refuses to run it until out-of-band confirmation is recorded (the
+gate runs before anyone can confirm, so it can't block on it). The no-playbook rules arrive in Week 4.
 
 `evaluate` is pure. `check` records its result on a run: a gate_decision event per step, then the
 next state. The Day 5 runner calls `check` too.
@@ -78,6 +80,10 @@ def _risk_rule(risk: RiskClass, intents: Sequence[str], requester_approved: bool
     if autonomy == "A3" and risk in A3_WAIVES:
         return "auto", f"autonomy.a3.{risk}", f"A3: {risk} runs automatically for this client"
     rule = f"risk.{risk}"
+    if risk == "security.credential" and "mfa.reset" in intents:
+        # Approved like any credential step, and it can't run until runner.accept sees oob_confirmed.
+        return "approve", "mfa.oob_required", ("resets a credential: needs out-of-band confirmation with the "
+                                               "subject's manager, then a person's approval")
     if risk in APPROVE_CLASSES:
         return "approve", rule, f"{risk} always needs a person's approval"
     if risk == "access.revoke":

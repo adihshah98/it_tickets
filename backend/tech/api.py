@@ -210,6 +210,10 @@ class ApprovalIn(BaseModel):
     answers: dict[str, str] = {}
 
 
+class OobIn(BaseModel):
+    by: str  # the technician who reached the manager
+
+
 # ------------------------------------------------------------------ app
 
 
@@ -283,6 +287,12 @@ def create_app(runtime: runner.Runtime | None = None, *, web_origin: str = DEFAU
         plan = runner.accept(rt, run_id, by=body.by, answers=body.answers, reject=body.decision == "reject")
         if plan is not None:
             tasks.spawn(run_id, runner.execute(rt, run_id, plan), what="execute")
+        return {"state": rt.store.get_run(run_id).state.value}
+
+    @app.post("/runs/{run_id}/oob")
+    async def oob(run_id: int, body: OobIn) -> dict[str, str]:
+        """The demo's "Manager confirmed via SMS" (mocked requester.confirmOutOfBand)."""
+        runner.confirm_oob(rt, run_id, by=body.by)
         return {"state": rt.store.get_run(run_id).state.value}
 
     @app.post("/runs/{run_id}/resume", status_code=202)

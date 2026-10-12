@@ -35,7 +35,7 @@ from tech.core.config import REPO, Settings, ensure_link_key
 from tech.core.models import STEP_TYPES, Plan, Triage
 from tech.core.observability import configure_logfire
 from tech.core.store import RunState, Store
-from tech.execution import scheduler
+from tech.execution import mocks, scheduler
 from tech.execution.catalogue import ACTIONS, FOLLOWUP_ACTIONS
 from tech.execution.executor import Execution
 from tech.graph.client import GraphClient, graph_from_settings
@@ -79,6 +79,7 @@ class Runtime:
     link_key: str | None = None
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     closeout_model: Any = CLOSEOUT_MODEL
+    clean_sign_ins_for: str | None = None  # MFA demo only: settings.mfa_demo_clean_user
 
     @classmethod
     def from_settings(cls, settings: Settings, *, environment: str) -> Runtime:
@@ -90,7 +91,7 @@ class Runtime:
             (REPO / "data").mkdir(exist_ok=True)
         return cls(store=Store(settings.database_url), graph=graph_from_settings(settings),
                    facts=load_client_facts(settings.domain), domain=settings.domain,
-                   link_key=ensure_link_key(settings))
+                   link_key=ensure_link_key(settings), clean_sign_ins_for=settings.mfa_demo_clean_user)
 
 
 def transition(store: Store, run_id: int, to: RunState, **detail: Any) -> None:
@@ -125,6 +126,34 @@ def effective_plan(store: Store, run_id: int, domain: str) -> Plan:
 
 def findings(store: Store, run_id: int) -> list[str]:
     return [e.payload["text"] for e in store.events_of(run_id, "finding")]
+
+
+# ------------------------------------------------------------------ out-of-band confirmation (MFA reset)
+
+
+def needs_oob(store: Store, run_id: int, plan: Plan) -> bool:
+    """An MFA reset that writes a credential needs the subject confirmed out of band first (Tech.MD §6.3, §8)."""
+    triage = store.last_event(run_id, "triage")
+    if triage is None or "mfa.reset" not in triage.payload["triage"]["intents"]:
+        return False
+    return any(ACTIONS[s.action].risk(s.params) == "security.credential" for s in plan.steps if s.action in ACTIONS)
+
+
+def oob_missing(store: Store, run_id: int, plan: Plan) -> bool:
+    return needs_oob(store, run_id, plan) and store.last_event(run_id, "oob_confirmed") is None
+
+
+def confirm_oob(rt: Runtime, run_id: int, *, by: str) -> None:
+    """The demo's "Manager confirmed via SMS": record oob_confirmed on a waiting MFA reset."""
+    state = rt.store.get_run(run_id).state
+    if state not in (S.AWAITING_APPROVAL, S.HELD):
+        raise RunError(f"run {run_id} is {state}; out-of-band confirmation is for a run waiting on approval")
+    if not needs_oob(rt.store, run_id, load_plan(rt.store, run_id)):
+        raise RunError(f"run {run_id} has no MFA credential step to confirm")
+    if rt.store.last_event(run_id, "oob_confirmed") is not None:
+        raise RunError(f"run {run_id} is already confirmed out of band")
+    by = by.strip().lower()
+    mocks.confirm_out_of_band(rt.store, run_id, by=by if "@" in by else f"{by}@{rt.domain}".lower())
 
 
 # ------------------------------------------------------------------ approver's answers
@@ -175,7 +204,8 @@ async def start(rt: Runtime, run_id: int, text: str, from_address: str, *,
     """Triage, investigate and gate a new run; execute straight away if nothing needs approval."""
     triage, check = await run_intake(rt.store, run_id, text, from_address, rt.facts, model=intake_model)
     result = await investigate(rt.store, run_id, text, triage, requester_approved=check.approved, graph=rt.graph,
-                               facts=rt.facts, domain=rt.domain, model=investigator_model)
+                               facts=rt.facts, domain=rt.domain, model=investigator_model,
+                               clean_sign_ins_for=rt.clean_sign_ins_for)
     if result.outcome == "planned":
         gate.check(rt.store, run_id, result.plan, requester_approved=check.approved, intents=triage.intents,
                    playbooks=result.playbooks, facts=rt.facts, transcript=result.transcript,
@@ -218,6 +248,8 @@ def accept(rt: Runtime, run_id: int, *, by: str, answers: dict[str, str] | None 
         raise RunError(f"the gate blocked {', '.join(blocked)}; a blocked plan can't be approved")
 
     plan = apply_answers(load_plan(rt.store, run_id), answers, rt.domain)  # fails before anything is recorded
+    if not reject and oob_missing(rt.store, run_id, plan):  # so OOB can never land after a credential write
+        raise RunError("this MFA reset needs out-of-band confirmation with the subject's manager before it can run")
     rt.store.append_event(run_id, "approval", {
         "by": by, "decision": "reject" if reject else "approve", "answers": answers,
         "released_hold": state == S.HELD,
@@ -249,6 +281,10 @@ async def resume(rt: Runtime, run_id: int) -> RunState:
 async def execute(rt: Runtime, run_id: int, plan: Plan) -> None:
     if rt.store.get_run(run_id).state != S.EXECUTING:
         transition(rt.store, run_id, S.EXECUTING)
+    if oob_missing(rt.store, run_id, plan):  # accept() already refuses this; never write a credential without it
+        transition(rt.store, run_id, S.ESCALATED, kind="oob", reason="MFA reset reached execution without "
+                   "out-of-band confirmation; nothing was written", findings=findings(rt.store, run_id))
+        return
     execution = Execution(rt.store, run_id, rt.graph, rt.domain, link_key=rt.link_key, sleep=rt.sleep)
     try:
         result = await execution.run(plan)

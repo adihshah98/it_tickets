@@ -3,6 +3,7 @@
     uv run tech run "hey team, we have a new hire..." --from tgarcia@<domain>
     uv run tech run - --from tgarcia < ticket.txt        # ticket from stdin; a bare name gets @<domain>
     uv run tech approve 7 --confirm upn_format=priya.nair [--by tgarcia] [--reject]
+    uv run tech oob 7 --by tgarcia                       # MFA reset: "Manager confirmed via SMS" (mocked)
     uv run tech resume 7                                 # carry on an execution a crashed process left
     uv run tech followup list 7 | run 3                  # scheduled follow-ups; "run now"
 
@@ -171,6 +172,9 @@ def main() -> None:
     approve_p.add_argument("--confirm", action="append", default=[], metavar="KEY=VALUE",
                            help=f"answer a confirm question: {', '.join(runner.ANSWER_KEYS)}")
     approve_p.add_argument("--reject", action="store_true")
+    oob_p = sub.add_parser("oob", help="record out-of-band confirmation on a waiting MFA reset (mocked)")
+    oob_p.add_argument("run_id", type=int)
+    oob_p.add_argument("--by", required=True, help="the technician who reached the subject's manager")
     resume_p = sub.add_parser("resume", help="carry on an interrupted execution")
     resume_p.add_argument("run_id", type=int)
     followup_p = sub.add_parser("followup", help="list a run's follow-ups, or run one now")
@@ -190,6 +194,11 @@ def main() -> None:
                 return await runner.approve(rt, args.run_id, by=by, answers=answers, reject=args.reject)
 
             code = asyncio.run(continue_run(args.run_id, approve))
+        case "oob":
+            async def oob(rt: runner.Runtime) -> None:
+                runner.confirm_oob(rt, args.run_id, by=args.by)
+
+            code = asyncio.run(continue_run(args.run_id, oob))
         case "resume":
             code = asyncio.run(continue_run(args.run_id, lambda rt: runner.resume(rt, args.run_id)))
         case "followup":

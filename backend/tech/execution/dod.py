@@ -18,8 +18,9 @@ from typing import Any
 from tech.core.models import Plan
 from tech.core.store import Store
 from tech.execution import links, scheduler
+from tech.execution.catalogue import ACTIONS
 from tech.graph.client import GraphClient, GraphError
-from tech.graph.writes import get_or_none, license_skus, member_group_ids, same
+from tech.graph.writes import auth_method_ids, get_or_none, license_skus, member_group_ids, same
 from tech.playbooks import ClientFacts, Playbook
 
 NO_USER = "no user.create step verified in this run"
@@ -90,6 +91,18 @@ class DodContext:
         """groupId (lowercase) -> new owner id, for every group.addOwner step (ownership transfer)."""
         return {s.params.groupId.lower(): s.params.userId for s in self.plan.steps if s.action == "group.addOwner"}
 
+    def subject(self) -> str | None:
+        """The MFA reset's subject: an existing user, so taken from the credential steps' params."""
+        for action in ("authMethod.delete", "tap.create"):
+            for step in self.plan.steps:
+                if step.action == action:
+                    return step.params.userId
+        return None
+
+    def methods_removed(self) -> dict[str, str]:
+        """methodId (lowercase) -> userId, for every authMethod.delete step in the plan."""
+        return {s.params.methodId.lower(): s.params.userId for s in self.plan.steps if s.action == "authMethod.delete"}
+
 
 Check = Callable[[DodContext, dict[str, Any]], Awaitable[Probe]]
 PROBES: dict[str, Check] = {}
@@ -153,9 +166,15 @@ async def user_in_groups(ctx: DodContext, args: dict[str, Any]) -> Probe:
 
 @probe("tap_active")
 async def tap_active(ctx: DodContext, args: dict[str, Any]) -> Probe:
-    if (user := ctx.new_user()) is None:
+    # A new hire's TAP (onboarding), else an existing user's (MFA reset). A `$ref:` subject is an
+    # onboarding user that was never created, so it fails the same way as before.
+    if (user := ctx.new_user()) is not None:
+        user_id = user["id"]
+    elif (subject := ctx.subject()) and not subject.startswith("$"):
+        user_id = subject
+    else:
         return Probe("tap_active", False, NO_USER)
-    taps = [t async for t in ctx.graph.list(f"/users/{user['id']}/authentication/temporaryAccessPassMethods")]
+    taps = [t async for t in ctx.graph.list(f"/users/{user_id}/authentication/temporaryAccessPassMethods")]
     live = [t for t in taps if t.get("methodUsabilityReason") not in INACTIVE_TAP]
     if not live:
         return Probe("tap_active", False, f"no usable TAP ({len(taps)} found)")
@@ -166,9 +185,12 @@ async def tap_active(ctx: DodContext, args: dict[str, Any]) -> Probe:
 async def message_sent(ctx: DodContext, args: dict[str, Any]) -> Probe:
     approval = ctx.store.last_event(ctx.run_id, "approval")
     allowed = {ctx.requester.casefold()} | ({approval.payload["by"].casefold()} if approval else set())
+    if (subject := ctx.subject()) and not subject.startswith("$"):  # an MFA reset's link may go to the subject
+        user = await get_or_none(ctx.graph, f"/users/{subject}", params={"$select": "id,userPrincipalName,mail"})
+        allowed |= {v.casefold() for v in (user or {}).values() if isinstance(v, str) and "@" in v}
     problems = []
     if not any(link.to.casefold() in allowed for link in links.for_run(ctx.store, ctx.run_id)):
-        problems.append(f"no one-time link to {ctx.requester} or the approver")
+        problems.append(f"no one-time link to {ctx.requester}, the approver or the subject")
     if not any(e.payload["kind"] == "reply" for e in ctx.store.events_of(ctx.run_id, "message_sent")):
         problems.append("no reply was sent")
     return Probe("message_sent", not problems, "; ".join(problems) or f"reply and one-time link to {ctx.requester}")
@@ -272,6 +294,35 @@ async def followup_scheduled(ctx: DodContext, args: dict[str, Any]) -> Probe:
     due = [f for f in scheduler.for_run(ctx.store, ctx.run_id) if f.kind == kind and f.status == "scheduled"]
     return Probe("followup_scheduled", bool(due),
                  f"{kind} scheduled for {due[0].run_at:%Y-%m-%d}" if due else f"no {kind} follow-up scheduled")
+
+
+# ------------------------------------------------------------------ MFA reset probes (Tech.MD §6.3)
+
+
+@probe("oob_confirmed")
+async def oob_confirmed(ctx: DodContext, args: dict[str, Any]) -> Probe:
+    """Confirmed out of band, and before any credential write (the order is the point)."""
+    confirmed = ctx.store.last_event(ctx.run_id, "oob_confirmed")
+    if confirmed is None:
+        return Probe("oob_confirmed", False, "no out-of-band confirmation was recorded")
+    early = [e.payload["step_id"] for e in ctx.store.events_of(ctx.run_id, "step_started")
+             if e.seq < confirmed.seq and ACTIONS[e.payload["action"]].risk_class == "security.credential"]
+    if early:
+        return Probe("oob_confirmed", False, f"confirmed only after credential steps ran: {', '.join(early)}")
+    p = confirmed.payload
+    return Probe("oob_confirmed", True, f"{p['contact']} confirmed via {p['via']} (recorded by {p['by']})")
+
+
+@probe("old_methods_removed")
+async def old_methods_removed(ctx: DodContext, args: dict[str, Any]) -> Probe:
+    if not (want := ctx.methods_removed()):
+        return Probe("old_methods_removed", True, "the plan removes no methods")
+    remaining = []
+    for user_id in set(want.values()):
+        have = await auth_method_ids(ctx.graph, user_id)
+        remaining += [mid for mid, uid in want.items() if uid == user_id and mid in have]
+    return Probe("old_methods_removed", not remaining,
+                 f"still registered: {', '.join(remaining)}" if remaining else f"removed {len(want)}")
 
 
 async def check(ctx: DodContext, playbook: Playbook, *, only: Collection[str] | None = None,

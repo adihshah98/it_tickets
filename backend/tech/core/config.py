@@ -31,6 +31,7 @@ class Settings:
     database_url: str
     link_key: str | None = None  # Fernet key for one-time links; see ensure_link_key
     web_origin: str = "http://localhost:3000"  # the workspace UI: CORS origin and one-time link URLs
+    mfa_demo_clean_user: str | None = None  # one user id whose sign-in history is mocked clean (graph/reads.py)
 
     @classmethod
     def load(cls, repo: Path = REPO) -> Settings:
@@ -48,6 +49,7 @@ class Settings:
             database_url=env.get("DATABASE_URL", f"sqlite:///{repo / 'data' / 'tech.db'}"),
             link_key=env.get("LINK_KEY") or None,
             web_origin=env.get("WEB_ORIGIN") or "http://localhost:3000",
+            mfa_demo_clean_user=env.get("MFA_DEMO_CLEAN_USER") or None,
         )
 
 

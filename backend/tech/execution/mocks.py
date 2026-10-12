@@ -3,15 +3,29 @@
 license.purchase stands in for a Pax8 order. The demo tenant's pool is seeded at 0 free seats, with one
 spare seat parked on the disabled `seat-holder` user (seed.py). "Buying" a seat removes seat-holder's
 license, so one real seat becomes free for the new hire; tenant/reset.py gives it back.
+
+requester.confirmOutOfBand stands in for reaching the subject's manager on a number already on file
+(oob_contacts). It is not a plan step: the demo's "Manager confirmed via SMS" button records an
+`oob_confirmed` event, which an MFA reset needs before it may run (runner.accept, the oob_confirmed probe).
 """
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from urllib.parse import quote
 
 from tech.graph.writes import Deviation, Handler, assign_license, get_or_none, license_skus
 
+if TYPE_CHECKING:
+    from tech.core.store import Event, Store
+
 SEAT_HOLDER = "seat-holder"
+
+
+def confirm_out_of_band(store: Store, run_id: int, *, by: str, contact: str = "manager",
+                        via: str = "sms") -> Event:
+    """Record that `by` confirmed the request with the subject's `contact` over `via` (mocked: no SMS is sent)."""
+    return store.append_event(run_id, "oob_confirmed", {"by": by, "contact": contact, "via": via, "mock": True})
 
 
 class LicensePurchase(Handler):

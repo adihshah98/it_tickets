@@ -119,6 +119,7 @@ class InvestigateDeps:
     playbooks: dict[str, Playbook] = field(default_factory=dict)
     transcript: Transcript = field(default_factory=Transcript)
     max_reads: int = MAX_READS
+    clean_sign_ins_for: str | None = None  # the MFA demo's one user with a clean sign-in history (reads.py)
     lint_attempts: int = 0
     last_problems: list[str] = field(default_factory=list)
 
@@ -133,7 +134,8 @@ async def _read(ctx: RunContext[InvestigateDeps], tool: str, **args: Any) -> Any
         deps.recorder.tool_call(tool, args, error=error)
         return {"error": error}
     try:
-        result = await run_read(deps.graph, deps.transcript, tool, **args)
+        result = await run_read(deps.graph, deps.transcript, tool, clean_sign_ins_for=deps.clean_sign_ins_for,
+                                **args)
     except GraphError as exc:  # the model sees the error (e.g. a 404) and can carry on
         error = f"{exc.status} {exc.code}: {exc.message}"
         deps.recorder.tool_call(tool, args, error=error)
@@ -281,11 +283,13 @@ async def investigate(
     graph: GraphClient, facts: ClientFacts, domain: str,
     model: Model | str = MODEL, today: date | None = None,
     limits: UsageLimits = LIMITS, timeout_s: float = TIMEOUT_S, max_reads: int = MAX_READS,
+    clean_sign_ins_for: str | None = None,
 ) -> Investigation:
     """INVESTIGATING -> PLAN_PROPOSED with a `plan` event, or -> ESCALATED with the findings so far."""
     store.set_state(run_id, RunState.INVESTIGATING)
     deps = InvestigateDeps(graph=graph, facts=facts, recorder=Recorder(store, run_id), max_reads=max_reads,
-                           playbooks=load_playbooks(list(triage.intents), domain))
+                           playbooks=load_playbooks(list(triage.intents), domain),
+                           clean_sign_ins_for=clean_sign_ins_for)
     instructions = INSTRUCTIONS.format(
         max_reads=max_reads, today=today or date.today(), domain=domain,
         playbooks=prompt_text(list(triage.intents), domain),

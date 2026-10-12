@@ -33,6 +33,9 @@ class FakeTenant:
         self.taps: dict[str, list[dict]] = {}
         self.mailbox: dict[str, dict] = {}          # uid -> mailboxSettings
         self.rules: dict[str, list[dict]] = {}      # uid -> inbox messageRules
+        self.auth_methods: dict[str, list[dict]] = {}  # uid -> registered methods (besides TAPs), as Graph lists them
+        self.risky: dict[str, dict] = {}            # uid -> riskyUser; absent = never flagged (404)
+        self.sign_ins: list[dict] = []              # the audit log's sign-in rows (the $filter isn't applied)
         self.calls: list[tuple[str, str, dict | None]] = []
         self._failures: list[list] = []
         self.stale_member_reads = 0  # memberOf reads that don't show new memberships yet (directory lag)
@@ -45,6 +48,16 @@ class FakeTenant:
         self.users[uid] = {"id": uid, "displayName": name, "userPrincipalName": f"{alias}@{self.domain}",
                            "accountEnabled": True, "usageLocation": "US"}
         return uid
+
+    def add_auth_method(self, uid: str, segment: str = "microsoftAuthenticatorMethods", name: str = "iPhone",
+                        mid: str | None = None) -> str:
+        """Register a method. `segment` is its Graph collection; the @odata.type is derived the way Graph names it
+        (microsoftAuthenticatorMethods -> #microsoft.graph.microsoftAuthenticatorAuthenticationMethod)."""
+        mid = mid or str(uuid.uuid4())
+        kind = segment.removesuffix("Methods") + "AuthenticationMethod"
+        self.auth_methods.setdefault(uid, []).append(
+            {"id": mid, "@odata.type": f"#microsoft.graph.{kind}", "displayName": name, "segment": segment})
+        return mid
 
     def fail(self, method: str, prefix: str, *statuses: int, message: str = "boom") -> None:
         self._failures.append([method, prefix, list(statuses), message])
@@ -76,6 +89,12 @@ class FakeTenant:
             return httpx.Response(201, json=self.users[uid])
         if method == "GET" and path == "/subscribedSkus":
             return httpx.Response(200, json={"value": []})
+        if method == "GET" and path == "/auditLogs/signIns":
+            return httpx.Response(200, json={"value": self.sign_ins})
+        if m := re.fullmatch(r"/identityProtection/riskyUsers/([^/]+)", path):
+            if (risky := self.risky.get(m.group(1).lower())) is None:
+                return error(404, "riskyUser not found", "ResourceNotFound")
+            return httpx.Response(200, json=risky)
         if m := re.fullmatch(r"/groups/([^/]+)/members/\$ref", path):
             uid = body["@odata.id"].rsplit("/", 1)[1]
             if uid not in self.users:
@@ -140,6 +159,18 @@ class FakeTenant:
                 return httpx.Response(201, json=tap | {"temporaryAccessPass": TAP_VALUE})
             case "GET", "/authentication/temporaryAccessPassMethods":
                 return httpx.Response(200, json={"value": self.taps.get(uid, [])})
+            case "GET", "/authentication/methods":  # every method, TAPs included, like Graph's aggregate list
+                methods = [{k: v for k, v in am.items() if k != "segment"} for am in self.auth_methods.get(uid, [])]
+                taps = [{"id": t["id"], "@odata.type": "#microsoft.graph.temporaryAccessPassAuthenticationMethod"}
+                        for t in self.taps.get(uid, [])]
+                return httpx.Response(200, json={"value": methods + taps})
+            case "DELETE", _ if (d := re.fullmatch(r"/authentication/([A-Za-z0-9]+Methods)/([^/]+)", rest)):
+                registered = self.auth_methods.get(uid, [])
+                match = next((am for am in registered if am["id"] == d.group(2)), None)
+                if match is None or match["segment"] != d.group(1):  # Graph 404s a method under the wrong type
+                    return error(404, "authentication method not found", "itemNotFound")
+                registered.remove(match)
+                return httpx.Response(204)
             case "POST", "/revokeSignInSessions":
                 user["signInSessionsValidFromDateTime"] = datetime.now(UTC).isoformat()
                 return httpx.Response(200, json={"value": True})
