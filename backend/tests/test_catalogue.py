@@ -36,6 +36,7 @@ def test_every_action_has_a_verify_read_and_compensation():
     ("license.assign", "write.reversible"),
     ("group.addMember", "write.reversible"),
     ("tap.create", "security.credential"),
+    ("authMethod.delete", "security.credential"),
 ])
 def test_risk_classes_match_tech_md(action, risk):
     assert ACTIONS[action].risk_class == risk

@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from tech.core.models.base import Intent, RiskClass
 from tech.core.models.params import (
+    AuthMethodDeleteParams,
     FollowupParams,
     GroupAddMemberParams,
     GroupAddOwnerParams,
@@ -101,17 +102,22 @@ class GroupAddOwnerStep(StepBase):
     params: GroupAddOwnerParams
 
 
+class AuthMethodDeleteStep(StepBase):
+    action: Literal["authMethod.delete"]
+    params: AuthMethodDeleteParams
+
+
 Step = Annotated[
     UserCreateStep | UserUpdateStep | LicensePurchaseStep | LicenseAssignStep | GroupAddMemberStep
     | TapCreateStep | FollowupStep | LinkSendStep | SessionsRevokeStep | MailboxAutoReplyStep
-    | MailboxForwardRuleStep | GroupRemoveMemberStep | GroupAddOwnerStep,
+    | MailboxForwardRuleStep | GroupRemoveMemberStep | GroupAddOwnerStep | AuthMethodDeleteStep,
     Field(discriminator="action"),
 ]
 STEP_TYPES: dict[str, type[StepBase]] = {
     t.model_fields["action"].annotation.__args__[0]: t  # type: ignore[union-attr]
     for t in (UserCreateStep, UserUpdateStep, LicensePurchaseStep, LicenseAssignStep, GroupAddMemberStep,
               TapCreateStep, FollowupStep, LinkSendStep, SessionsRevokeStep, MailboxAutoReplyStep,
-              MailboxForwardRuleStep, GroupRemoveMemberStep, GroupAddOwnerStep)
+              MailboxForwardRuleStep, GroupRemoveMemberStep, GroupAddOwnerStep, AuthMethodDeleteStep)
 }
 
 

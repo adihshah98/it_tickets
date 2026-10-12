@@ -1,0 +1,28 @@
+# Tech.MD §6.3. {domain} is replaced with the tenant's domain when loaded.
+intent: mfa.reset
+goal: A verified person regains access to their Microsoft 365 account through a fresh MFA registration, without opening a takeover path.
+must_investigate:
+  - users.get(subject)                # is this a person? (manager, department, licensed)
+  - authMethods.list(subject)
+  - signIns.list(subject, days=14)    # foreign/impossible travel, MFA failures, new devices
+  - riskyUsers.get(subject)           # best-effort; P1 gives limited detail
+triage_checks:                        # decide whether this playbook applies at all
+  - which_system: "Is it M365/Entra MFA? Vendor apps (e.g. a parking-payments portal) -> how-to guide, not this playbook."
+  - which_credential: "M365 vs remote-server vs VPN password: only M365 is in scope; others -> needs_technician."
+  - really_mfa: "'Needs admin approval' on a phone = app consent / mail app issue, not lost MFA."
+  - service_account: "Listed in known_service_accounts, no manager, shared mailbox-like name, or non-interactive app sign-ins -> escalate; never reset."
+definition_of_done:
+  - oob_confirmed: {subject: "$subject"}                         # before any write
+  - old_methods_removed: {user: "$subject", methods: "$plan.methods_to_remove"}
+  - tap_active: {user: "$subject"}
+  - message_sent: {to: "$subject", via: one_time_link}
+  - followup_scheduled: {type: verify_new_method, in_hours: 24}
+allowed_actions: [authMethod.delete, tap.create, link.sendOneTime, followup.schedule]
+gotchas:
+  - Suspicious sign-ins -> stop; escalate as possible account takeover with evidence.
+  - Requests to "just text me the code" still go through OOB + one-time link.
+  - Privileged accounts may need extra roles for app-only method changes -> escalate.
+never:
+  - Act before out-of-band confirmation completes.
+  - Reset a service/shared account, or share any real password.
+  - Put a TAP or code in any reply, note or log.

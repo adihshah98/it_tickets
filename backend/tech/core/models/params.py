@@ -137,7 +137,20 @@ class GroupAddOwnerParams(Params):
                                   description="Display name, for the approval card only")
 
 
-LinkContent = Literal["email_access_steps", "outlook_mobile_app_tip", "file_share_note"]
+# ------------------------------------------------------------------ MFA actions (Tech.MD §6.3, §7)
+
+AuthMethodType = Literal["authenticator", "phone", "fido2", "softwareOath", "windowsHelloForBusiness"]
+
+
+class AuthMethodDeleteParams(Params):
+    userId: ObjectIdOrRef = alias("userId", "user_id")
+    methodType: AuthMethodType = alias("methodType", "method_type",
+                                       description="Which kind of method to delete; the handler maps it to "
+                                                   "the Graph endpoint")
+    methodId: ObjectId = alias("methodId", "method_id", description="The method's id, observed from authMethods.list")
+
+
+LinkContent =Literal["email_access_steps", "outlook_mobile_app_tip", "file_share_note"]
 
 
 class LinkSendParams(Params):

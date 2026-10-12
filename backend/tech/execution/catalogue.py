@@ -3,7 +3,7 @@
 The gate takes risk classes from here, never from the plan (the plan's risk_class is only compared, for
 the audit log). Each action's `handler` does the work (graph/writes.py, mocks.py, links.py, scheduler.py);
 `verify` and `compensate` describe it for people, and `compensate` is what an escalation offers to roll back.
-Onboarding and offboarding actions are here; the MFA actions arrive in Week 3 Day 13.
+Onboarding, offboarding and MFA reset actions are here.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from tech.core.models import (
+    AuthMethodDeleteParams,
     FollowupParams,
     GroupAddMemberParams,
     GroupAddOwnerParams,
@@ -142,5 +143,13 @@ ACTIONS: dict[str, ActionSpec] = {spec.name: spec for spec in [
         "group.addOwner", GroupAddOwnerParams, "data.access",
         "POST /groups/{groupId}/owners/$ref", "GET /groups/{groupId}/owners: contains userId",
         "DELETE /groups/{groupId}/owners/{userId}/$ref", handler=HANDLERS["group.addOwner"],
+    ),
+    # MFA reset (Tech.MD §6.3, §7)
+    ActionSpec(
+        "authMethod.delete", AuthMethodDeleteParams, "security.credential",
+        "DELETE /users/{userId}/authentication/{microsoftAuthenticator|phone|fido2|...}Methods/{methodId}",
+        "GET /users/{userId}/authentication/methods: the method is gone",
+        "nothing to restore: the user registers a new method (with the TAP sent by one-time link)",
+        handler=HANDLERS["authMethod.delete"],
     ),
 ]}

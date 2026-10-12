@@ -293,6 +293,48 @@ class TapCreate(Handler):
         return True, {"exists": True, "usability": tap.get("methodUsabilityReason")}
 
 
+AUTH_METHOD_SEGMENTS = {  # AuthMethodDeleteParams.methodType -> the Graph collection the DELETE goes to
+    "authenticator": "microsoftAuthenticatorMethods",
+    "phone": "phoneMethods",
+    "fido2": "fido2Methods",
+    "softwareOath": "softwareOathMethods",
+    "windowsHelloForBusiness": "windowsHelloForBusinessMethods",
+}
+
+
+async def auth_method_ids(graph: GraphClient, user_id: str) -> set[str]:
+    """Every registered method's id. The aggregated /methods list carries each method's id whatever its type."""
+    return {m["id"].lower() async for m in graph.list(f"/users/{user_id}/authentication/methods",
+                                                       retry_replication=True)}
+
+
+class AuthMethodDelete(Handler):
+    """DELETE one registered MFA method. Not restorable by us: the user registers a new one."""
+
+    def _path(self, p):
+        return f"/users/{p['userId']}/authentication/{AUTH_METHOD_SEGMENTS[p['methodType']]}/{p['methodId']}"
+
+    async def existing(self, ctx, p):
+        if p["methodId"].lower() not in await auth_method_ids(ctx.graph, p["userId"]):
+            return {"userId": p["userId"], "methodId": p["methodId"]}  # already gone
+        return None
+
+    async def snapshot(self, ctx, p):
+        return {"methodPresent": True, "methodType": p["methodType"]}
+
+    async def act(self, ctx, p):
+        try:
+            await ctx.graph.delete(self._path(p), retry_replication=True)
+        except GraphError as exc:
+            if not (exc.status == 404 or "does not exist" in exc.message.lower()):
+                raise
+        return {"userId": p["userId"], "methodId": p["methodId"]}
+
+    async def verify(self, ctx, p, output):
+        gone = output["methodId"].lower() not in await auth_method_ids(ctx.graph, p["userId"])
+        return gone, {"methodPresent": not gone, "methodId": output["methodId"]}
+
+
 # ------------------------------------------------------------------ offboarding (Tech.MD §6.2, §7)
 
 
@@ -453,4 +495,5 @@ HANDLERS: dict[str, Handler] = {
     "mailbox.forwardRule": MailboxForwardRule(),
     "group.removeMember": GroupRemoveMember(),
     "group.addOwner": GroupAddOwner(),
+    "authMethod.delete": AuthMethodDelete(),
 }

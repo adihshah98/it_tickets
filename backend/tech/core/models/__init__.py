@@ -23,6 +23,8 @@ from tech.core.models.base import (
 )
 from tech.core.models.gate import GateDecision
 from tech.core.models.params import (
+    AuthMethodDeleteParams,
+    AuthMethodType,
     FollowupParams,
     GroupAddMemberParams,
     GroupAddOwnerParams,
@@ -40,6 +42,7 @@ from tech.core.models.params import (
 )
 from tech.core.models.plan import (
     STEP_TYPES,
+    AuthMethodDeleteStep,
     Confirmation,
     FollowupStep,
     GroupAddMemberStep,
@@ -71,13 +74,13 @@ __all__ = [
     "UserCreateParams", "UserUpdateParams", "LicensePurchaseParams", "LicenseAssignParams",
     "GroupAddMemberParams", "TapCreateParams", "FollowupParams", "LinkSendParams", "LinkContent",
     "SessionsRevokeParams", "MailboxAutoReplyParams", "MailboxForwardRuleParams",
-    "GroupRemoveMemberParams", "GroupAddOwnerParams",
+    "GroupRemoveMemberParams", "GroupAddOwnerParams", "AuthMethodDeleteParams", "AuthMethodType",
     # plan
     "StepBase", "UserCreateStep", "UserUpdateStep", "LicensePurchaseStep", "LicenseAssignStep",
     "GroupAddMemberStep", "TapCreateStep", "FollowupStep", "LinkSendStep", "Step", "STEP_TYPES",
     "TechnicianItem", "Confirmation", "Plan",
     "SessionsRevokeStep", "MailboxAutoReplyStep", "MailboxForwardRuleStep",
-    "GroupRemoveMemberStep", "GroupAddOwnerStep",
+    "GroupRemoveMemberStep", "GroupAddOwnerStep", "AuthMethodDeleteStep",
     # gate
     "GateDecision",
 ]
