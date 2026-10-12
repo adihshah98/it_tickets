@@ -179,6 +179,22 @@ async def auth_methods(graph: GraphClient, user_id: str) -> list[dict]:
             async for m in graph.list(f"/users/{user_id}/authentication/methods")]
 
 
+async def risky_user(graph: GraphClient, user_id: str) -> dict:
+    """Identity Protection's risk verdict on a user (best-effort: with Entra ID P1 the level and detail
+    read 'hidden', so reason over signIns.list too). risky=None means it couldn't be checked, not 'clean'."""
+    try:
+        r = await graph.get(f"/identityProtection/riskyUsers/{user_id}")
+    except GraphError as exc:
+        if exc.status == 404:  # Identity Protection has never flagged this user
+            return {"risky": False}
+        if exc.status == 403:  # no permission or licence: unknown, which must not read as clean
+            return {"risky": None, "detail": f"risk data not available ({exc.code})"}
+        raise
+    return {"risky": r.get("riskState") not in (None, "none", "dismissed", "remediated"),
+            "riskLevel": r.get("riskLevel"), "riskState": r.get("riskState"), "riskDetail": r.get("riskDetail"),
+            "riskLastUpdatedDateTime": r.get("riskLastUpdatedDateTime")}
+
+
 async def mailbox_settings(graph: GraphClient, user_id: str) -> dict:
     """A user's mailbox settings: whether an auto-reply is on, and its messages (for offboarding)."""
     try:
@@ -251,6 +267,7 @@ READS: dict[str, ReadFn] = {
     "subscribedSkus.list": subscribed_skus,
     "signIns.list": sign_ins,
     "authMethods.list": auth_methods,
+    "riskyUsers.get": risky_user,
     "mailboxSettings.get": mailbox_settings,
     "messageRules.list": message_rules,
     "files.search": files_search,

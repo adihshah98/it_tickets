@@ -187,6 +187,12 @@ async def auth_methods(ctx: RunContext[InvestigateDeps], user_id: str) -> list[d
     return await _read(ctx, "authMethods.list", user_id=user_id)
 
 
+async def risky_user(ctx: RunContext[InvestigateDeps], user_id: str) -> dict:
+    """Identity Protection's risk verdict on a user (best-effort: with Entra ID P1 the level and detail
+    read 'hidden', so reason over signIns.list too). risky=None means it couldn't be checked, not 'clean'."""
+    return await _read(ctx, "riskyUsers.get", user_id=user_id)
+
+
 async def mailbox_settings(ctx: RunContext[InvestigateDeps], user_id: str) -> dict:
     """A user's mailbox settings: whether an auto-reply is on, and its messages (offboarding)."""
     return await _read(ctx, "mailboxSettings.get", user_id=user_id)
@@ -214,7 +220,8 @@ async def record_finding(ctx: RunContext[InvestigateDeps], finding: str) -> str:
 
 
 READ_TOOLS = [users_search, users_list, users_get, users_member_of, users_owned_objects, users_license_details,
-              subscribed_skus, sign_ins, auth_methods, mailbox_settings, message_rules, files_search, file_versions]
+              subscribed_skus, sign_ins, auth_methods, risky_user, mailbox_settings, message_rules, files_search,
+              file_versions]
 TOOLS = [*READ_TOOLS, record_finding]
 
 

@@ -157,6 +157,39 @@ async def test_files_search_skips_groups_without_a_site(graph, transcript):
 
 
 @respx.mock
+async def test_risky_user_flagged(graph, transcript):
+    respx.get(f"{GRAPH}/identityProtection/riskyUsers/{MARCUS}").mock(return_value=httpx.Response(200, json={
+        "id": MARCUS, "riskLevel": "high", "riskState": "atRisk", "riskDetail": "none",
+        "riskLastUpdatedDateTime": "2026-10-09T21:20:00Z", "userPrincipalName": "marcus@x"}))
+    assert await run_read(graph, transcript, "riskyUsers.get", user_id=MARCUS) == {
+        "risky": True, "riskLevel": "high", "riskState": "atRisk", "riskDetail": "none",
+        "riskLastUpdatedDateTime": "2026-10-09T21:20:00Z"}
+
+
+@respx.mock
+async def test_risky_user_remediated_is_not_risky(graph, transcript):
+    respx.get(f"{GRAPH}/identityProtection/riskyUsers/{MARCUS}").mock(return_value=httpx.Response(200, json={
+        "riskLevel": "none", "riskState": "remediated"}))
+    assert (await run_read(graph, transcript, "riskyUsers.get", user_id=MARCUS))["risky"] is False
+
+
+@respx.mock
+async def test_risky_user_never_flagged(graph, transcript):
+    respx.get(f"{GRAPH}/identityProtection/riskyUsers/{MARCUS}").mock(
+        return_value=httpx.Response(404, json={"error": {"code": "ResourceNotFound"}}))
+    assert await run_read(graph, transcript, "riskyUsers.get", user_id=MARCUS) == {"risky": False}
+
+
+@respx.mock
+async def test_risky_user_unavailable_is_unknown_not_clean(graph, transcript):
+    respx.get(f"{GRAPH}/identityProtection/riskyUsers/{MARCUS}").mock(
+        return_value=httpx.Response(403, json={"error": {"code": "Authorization_RequestDenied", "message": "no"}}))
+    result = await run_read(graph, transcript, "riskyUsers.get", user_id=MARCUS)
+    assert result["risky"] is None and "Authorization_RequestDenied" in result["detail"]
+    assert transcript.called("riskyUsers.get")  # recorded as a successful read the model can reason over
+
+
+@respx.mock
 async def test_graph_errors_are_recorded_then_raised(graph, transcript):
     respx.get(f"{GRAPH}/auditLogs/signIns").mock(
         return_value=httpx.Response(403, json={"error": {"code": "Authorization_RequestDenied", "message": "no"}}))
