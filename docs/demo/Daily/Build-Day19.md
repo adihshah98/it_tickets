@@ -22,7 +22,7 @@ Each part ends with green tests and a commit, then a stop for review.
 | ---- | ---- | ----------------- | ------ |
 | 1 | Library: `approve`, `set_autonomy`, ceiling, `playbook_check`, version on the plan event, demotion; #27, #28 | Learned playbooks can run; A3 runs can demote; gate rule `autonomy.unproven` | **Done** |
 | 2 | `DraftSource`, `from_run`/`from_written`, the drafter (offline, FunctionModel) | New, nothing calls it yet | **Done** |
-| 3 | API routes + a CLI `save-playbook`; optional live draft of run 20 | New routes only | |
+| 3 | API routes + a CLI `save-playbook`; optional live draft of run 20 | New routes only | **Done** (offline); live pending your approval |
 
 **Needs your approval:** only Part 3's optional live step (one Opus drafter call on run 20, no tenant writes).
 
@@ -338,6 +338,43 @@ dropped IDs, a valid draft and its event, one retry carrying the problems, two f
 - approve → `GET /playbooks/{intent}` shows v1;
 - a rejected approval → 422 with the problems;
 - autonomy above the ceiling → 422.
+
+**As built:**
+
+- **`runner.draft_playbook(rt, run_id, intent=None, notes=None)`** is what the API and the CLI share.
+  - It raises `RunError` (a 409 in the API) unless `can_save_playbook`.
+  - It builds the source with `from_run`, applies the intent override, and calls the drafter with
+    `rt.drafter_model`. `Runtime.drafter_model` is new, so tests can inject a model.
+  - Nothing is saved until approve.
+- **API:**
+  - `PlaybookRejected` → **422** with `detail` listing every problem;
+  - an unknown intent on `/autonomy` or `GET /playbooks/{intent}` → 404;
+  - the draft route takes `{intent?, notes?}`;
+  - every playbook response carries `version`, `source`, `source_run_id`, `approved_by`, `autonomy` and
+    `ceiling`, and `GET /playbooks/{intent}` adds `yaml` and `versions`.
+  - Drafting is awaited inline rather than in a background task. It's one model call with no run state to
+    move.
+- **CLI:** `tech save-playbook RUN --by NAME [--intent SLUG] [--autonomy A1|A2|A3] [--yes]`.
+  - It prints the YAML and any problems, then asks before saving. It exits 0 when saved, 1 when not.
+  - After an approval, `continue_run`'s hint now names the command.
+- **`conftest.drafter_model(*texts)`** (moved from `test_drafter.py`) plays the drafter in the API and CLI
+  tests too.
+- **A saved run stays `can_save_playbook`.** Saving it again makes the next version. That's harmless, and
+  re-drafting after editing the notes is a real use.
+
+**Tests:**
+
+- `test_api.py` (6):
+  - a draft on an unfinished run, or on a run with a playbook → 409;
+  - save → approve at A3 → `GET /playbooks/{intent}` and the list;
+  - an intent rename;
+  - a widened approval → 422 with the problem;
+  - a written playbook is drafted, refused at A3, accepted at A2, refused A3 on `/autonomy`, and accepts
+    A1;
+  - unknown intents → 404.
+- `test_cli.py` (2): it drafts, asks, saves; and it saves nothing on "n" or on a failing draft.
+
+**Result:** `uv run pytest`: 458 passed. `ruff` is clean. No model was called.
 
 **Live (optional, needs your approval):** run `save-playbook 20` against `data/tech.db`. That's one Opus
 call on Sophie's real run 20, with no tenant writes. Check that the draft passes the checks on the first or

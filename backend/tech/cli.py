@@ -6,10 +6,13 @@
     uv run tech oob 7 --by tgarcia                       # MFA reset: "Manager confirmed via SMS" (mocked)
     uv run tech resume 7                                 # carry on an execution a crashed process left
     uv run tech followup list 7 | run 3                  # scheduled follow-ups; "run now"
+    uv run tech save-playbook 20 --by aditya [--intent file.restore_version] [--autonomy A3] [--yes]
 
 `run` triages, investigates (linter in the loop), gates and, with nothing to approve, executes.
 `approve` executes an approved plan. Each prints the run's events as they are appended (the same
 stream the API serves over SSE: `uv run uvicorn tech.api:create_app --factory`). Both work on the same store.
+`save-playbook` drafts a playbook from a finished no-playbook run (one Opus call), prints it with any
+problems, and saves it on confirmation (exit 0 saved, 1 not saved).
 
 Exit code: 0 done or awaiting approval, 1 refused (e.g. approving a DONE run), 2 escalated, 3 held.
 """
@@ -27,6 +30,7 @@ from tech import runner
 from tech.core.config import Settings
 from tech.core.store import Event, RunState, Store
 from tech.execution import scheduler
+from tech.playbooks import PlaybookRejected
 
 
 def show(event: Event) -> None:
@@ -134,7 +138,8 @@ async def continue_run(run_id: int, action: Callable[[runner.Runtime], Awaitable
         for row in scheduler.for_run(rt.store, run_id):
             print(f"   follow-up {row.id}: {row.kind} at {row.run_at:%Y-%m-%d %H:%M}  [{row.status}]")
         if runner.can_save_playbook(rt.store, run_id):
-            print("   no playbook for this ticket type: this run can be saved as one", flush=True)
+            print(f"   no playbook for this ticket type: save it with `tech save-playbook {run_id} --by <you>`",
+                  flush=True)
         return exit_code(rt.store, run_id)
 
     return await with_runtime(work)
@@ -153,6 +158,28 @@ async def followups(command: str, ident: int) -> int:
         return 0 if ok else 2
 
     return await with_runtime(work)
+
+
+async def save_playbook(rt: runner.Runtime, run_id: int, *, by: str, intent: str | None = None,
+                        autonomy: str = "A2", yes: bool = False, ask: Callable[[str], str] = input) -> int:
+    """Draft a playbook from a run, show it, and approve it on confirmation. 0 saved, 1 not saved."""
+    print(f"drafting a playbook from run {run_id}...", flush=True)
+    draft = await runner.draft_playbook(rt, run_id, intent=intent)
+    print(f"--- {draft.intent} (from run {run_id}, {draft.source.kind}) ---\n{draft.yaml}", flush=True)
+    if draft.problems:
+        print("the draft fails its checks:", *(f"  - {p}" for p in draft.problems), sep="\n")
+        return 1
+    if not yes and ask(f"approve as {draft.intent} at {autonomy}? [y/N] ").strip().lower() not in ("y", "yes"):
+        print("not saved")
+        return 1
+    try:
+        row = rt.library.approve(draft.intent, draft.yaml, autonomy=autonomy, by=by, source=draft.source.kind,
+                                 source_run_id=run_id)
+    except PlaybookRejected as exc:
+        print("not saved:", *(f"  - {p}" for p in exc.problems), sep="\n")
+        return 1
+    print(f"saved {draft.intent} v{row.version} at {autonomy}, approved by {by}")
+    return 0
 
 
 def parse_answers(pairs: list[str]) -> dict[str, str]:
@@ -185,6 +212,12 @@ def main() -> None:
     followup_p = sub.add_parser("followup", help="list a run's follow-ups, or run one now")
     followup_p.add_argument("action", choices=["list", "run"])
     followup_p.add_argument("id", type=int, help="run id for list, follow-up id for run")
+    save_p = sub.add_parser("save-playbook", help="draft a playbook from a finished no-playbook run, and save it")
+    save_p.add_argument("run_id", type=int)
+    save_p.add_argument("--by", required=True, help="who approves the playbook")
+    save_p.add_argument("--intent", help="the job's intent slug, if not the one the run proposes")
+    save_p.add_argument("--autonomy", choices=["A1", "A2", "A3"], default="A2")
+    save_p.add_argument("--yes", action="store_true", help="save without asking")
     args = parser.parse_args()
 
     match args.command:
@@ -208,6 +241,9 @@ def main() -> None:
             code = asyncio.run(continue_run(args.run_id, lambda rt: runner.resume(rt, args.run_id)))
         case "followup":
             code = asyncio.run(followups(args.action, args.id))
+        case "save-playbook":
+            code = asyncio.run(with_runtime(lambda rt: save_playbook(
+                rt, args.run_id, by=args.by, intent=args.intent, autonomy=args.autonomy, yes=args.yes)))
     sys.exit(code)
 
 

@@ -8,6 +8,7 @@
     resume    carries on an execution a crashed process left in EXECUTING.
     close-out runs once the steps verify (CLOSING): DoD probes, reply and PSA note, time entry; a failed
               DoD escalates. A failed DoD or step also demotes any playbook the run used at A3 to A2.
+    draft_playbook  "Save as playbook" on a finished no-playbook run: the drafter's YAML, not yet saved.
 
 Each call can run in a new process (the CLI): what a run needs is rebuilt from its events: the plan
 from `plan`, the intents from `triage`, the approver's answers from `approval`, finished steps and
@@ -27,6 +28,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from tech import closeout
+from tech.agents import drafter
 from tech.agents.closeout import MODEL as CLOSEOUT_MODEL
 from tech.agents.intake import MODEL as INTAKE_MODEL
 from tech.agents.intake import run_intake
@@ -41,6 +43,7 @@ from tech.execution.catalogue import ACTIONS, FOLLOWUP_ACTIONS
 from tech.execution.executor import Execution
 from tech.graph.client import GraphClient, graph_from_settings
 from tech.graph.writes import SecretLeak
+from tech.learning.sources import from_run
 from tech.playbooks import ClientFacts, PlaybookLibrary, load_client_facts
 from tech.safety import gate
 
@@ -83,6 +86,7 @@ class Runtime:
     link_key: str | None = None
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     closeout_model: Any = CLOSEOUT_MODEL
+    drafter_model: Any = drafter.MODEL
     clean_sign_ins_for: str | None = None  # MFA demo only: settings.mfa_demo_clean_user
     learned_dir: Path | None = None  # where approved playbooks' source runs are recorded (None: not recorded)
     library: PlaybookLibrary = field(init=False)
@@ -145,6 +149,19 @@ def can_save_playbook(store: Store, run_id: int) -> bool:
     plan = store.last_event(run_id, "plan")
     return (store.get_run(run_id).state == S.DONE and plan is not None and bool(plan.payload.get("no_playbook"))
             and any(not e.payload.get("skipped") for e in store.events_of(run_id, "step_verified")))
+
+
+async def draft_playbook(rt: Runtime, run_id: int, *, intent: str | None = None,
+                         notes: list[str] | None = None) -> drafter.Draft:
+    """"Save as playbook": draft one from this run (Build-Day19). `intent` names the job when the proposed
+    one is wrong or `unknown`; `notes` are the technician's. Nothing is saved until PlaybookLibrary.approve."""
+    if not can_save_playbook(rt.store, run_id):
+        raise RunError(f"run {run_id} can't be saved as a playbook: it must be a finished no-playbook run "
+                       "that changed something")
+    source = from_run(rt.store, run_id, notes=notes or [])
+    if intent:
+        source = source.model_copy(update={"intent": intent})
+    return await drafter.draft(rt.store, source, model=rt.drafter_model)
 
 
 # ------------------------------------------------------------------ out-of-band confirmation (MFA reset)

@@ -6,7 +6,7 @@ from datetime import timedelta
 
 import httpx
 import pytest
-from conftest import DOMAIN, SPB, TAYLOR, drafts_model
+from conftest import DOMAIN, LEARNED_RESTORE, SPB, TAYLOR, drafter_model, drafts_model
 from fake_tenant import TAP_VALUE
 
 from tech import api, runner
@@ -335,3 +335,91 @@ async def test_a_playbook_run_or_an_escalated_one_cant_be_saved(app, client, rt,
     await client.post(f"/runs/{rejected}/approval", json={"by": "tgarcia", "decision": "reject"})
     await drained(app)
     assert (await client.get(f"/runs/{rejected}")).json()["can_save_playbook"] is False  # escalated, nothing done
+
+
+# ------------------------------------------------------------------ playbooks: save, write, approve, autonomy
+# (Build-Day19 part 3)
+
+RESTORE = "file.restore_version"
+
+
+async def done_restore(rt, restore_gated) -> int:
+    run_id, _, _ = restore_gated()
+    assert await runner.approve(rt, run_id, by=TAYLOR) == RunState.DONE
+    return run_id
+
+
+async def test_a_draft_needs_a_finished_no_playbook_run(client, rt, gated, restore_gated):
+    rt.drafter_model = drafter_model(LEARNED_RESTORE.read_text())
+    waiting, _, _ = restore_gated()
+    r = await client.post(f"/runs/{waiting}/playbook-draft", json={})
+    assert r.status_code == 409 and "can't be saved as a playbook" in r.json()["detail"]
+
+    run_id = gated()  # onboarding: it has a playbook
+    await runner.approve(rt, run_id, by=TAYLOR)
+    assert (await client.post(f"/runs/{run_id}/playbook-draft", json={})).status_code == 409
+
+
+async def test_save_as_playbook_then_approve_at_a3(client, rt, restore_gated):
+    rt.drafter_model = drafter_model(LEARNED_RESTORE.read_text())
+    run_id = await done_restore(rt, restore_gated)
+    assert (await client.get(f"/runs/{run_id}")).json()["can_save_playbook"] is True
+
+    draft = (await client.post(f"/runs/{run_id}/playbook-draft", json={"notes": ["check the times"]})).json()
+    assert (draft["intent"], draft["ok"], draft["problems"], draft["source"], draft["source_run_id"]) == (
+        RESTORE, True, [], "agent_run", run_id)
+
+    r = await client.post(f"/playbooks/{RESTORE}/approve", json={
+        "yaml": draft["yaml"], "autonomy": "A3", "by": "aditya", "source": "agent_run", "source_run_id": run_id})
+    assert r.status_code == 201, r.text
+    assert {k: r.json()[k] for k in ("version", "source", "autonomy", "ceiling", "approved_by")} == {
+        "version": 1, "source": "agent_run", "autonomy": "A3", "ceiling": "A3", "approved_by": "aditya"}
+
+    one = (await client.get(f"/playbooks/{RESTORE}")).json()
+    assert one["yaml"] == draft["yaml"] and [v["status"] for v in one["versions"]] == ["approved"]
+    assert {p["intent"] for p in (await client.get("/playbooks")).json()} == {
+        "mfa.reset", "user.offboard", "user.onboard", RESTORE}
+    assert (await client.get(f"/runs/{run_id}")).json()["can_save_playbook"] is True  # still a source run
+
+
+async def test_the_draft_can_be_renamed(client, rt, restore_gated):
+    text = LEARNED_RESTORE.read_text().replace(f"intent: {RESTORE}", "intent: sharepoint.restore_version")
+    rt.drafter_model = drafter_model(text)
+    run_id = await done_restore(rt, restore_gated)
+
+    draft = (await client.post(f"/runs/{run_id}/playbook-draft", json={"intent": "sharepoint.restore_version"})).json()
+    assert draft["intent"] == "sharepoint.restore_version" and draft["ok"]
+
+
+async def test_a_rejected_approval_is_a_422_with_every_problem(client, rt, restore_gated):
+    run_id = await done_restore(rt, restore_gated)
+    widened = LEARNED_RESTORE.read_text().replace("[file.restoreVersion]", "[file.restoreVersion, tap.create]")
+
+    r = await client.post(f"/playbooks/{RESTORE}/approve", json={
+        "yaml": widened, "autonomy": "A2", "by": "aditya", "source": "agent_run", "source_run_id": run_id})
+    assert r.status_code == 422
+    assert "allowed_actions has tap.create, which the run it was learned from never did." in r.json()["detail"]
+    assert (await client.get(f"/playbooks/{RESTORE}")).status_code == 404
+
+
+async def test_a_written_playbook_is_drafted_then_capped_below_a3(client, rt):
+    rt.drafter_model = drafter_model(LEARNED_RESTORE.read_text())
+    draft = (await client.post("/playbooks", json={
+        "intent": RESTORE, "text": "Restore the version of a file the requester means.",
+        "allowed_actions": ["file.restoreVersion"], "by": "aditya"})).json()
+    assert draft["ok"] and draft["source"] == "written" and draft["source_run_id"] is None
+
+    body = {"yaml": draft["yaml"], "by": "aditya", "source": "written"}
+    assert (await client.post(f"/playbooks/{RESTORE}/approve", json=body | {"autonomy": "A3"})).status_code == 422
+    r = await client.post(f"/playbooks/{RESTORE}/approve", json=body | {"autonomy": "A2"})
+    assert r.status_code == 201 and r.json()["ceiling"] == "A2"
+
+    r = await client.post(f"/playbooks/{RESTORE}/autonomy", json={"level": "A3", "by": "aditya"})
+    assert r.status_code == 422 and "A3 needs a successful approved run" in r.json()["detail"][0]
+    r = await client.post(f"/playbooks/{RESTORE}/autonomy", json={"level": "A1", "by": "aditya"})
+    assert r.status_code == 200 and r.json()["autonomy"] == "A1"
+
+
+async def test_autonomy_on_an_unknown_intent_is_a_404(client):
+    assert (await client.post("/playbooks/file.nothing/autonomy", json={"level": "A2", "by": "x"})).status_code == 404
+    assert (await client.get("/playbooks/file.nothing")).status_code == 404

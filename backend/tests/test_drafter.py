@@ -6,9 +6,9 @@ import re
 
 import pytest
 import yaml
-from conftest import LEARNED_RESTORE
+from conftest import LEARNED_RESTORE, drafter_model
 from eval_harness import load_case, run_case
-from pydantic_ai.messages import ModelResponse, RetryPromptPart, ToolCallPart
+from pydantic_ai.messages import RetryPromptPart
 from pydantic_ai.models.function import FunctionModel
 
 from tech.agents import drafter
@@ -17,20 +17,6 @@ from tech.safety.policy import UNIVERSAL_NEVER
 
 GOOD = LEARNED_RESTORE.read_text()
 WIDENED = GOOD.replace("[file.restoreVersion]", "[file.restoreVersion, tap.create]")
-
-
-def model_returning(*texts: str) -> FunctionModel:
-    """Plays the drafter: each call submits the next YAML text (the last one repeats). Keeps the messages."""
-    calls: list = []
-
-    def respond(messages, info) -> ModelResponse:
-        calls.append(messages)
-        text = texts[min(len(calls), len(texts)) - 1]
-        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"yaml": text})])
-
-    model = FunctionModel(respond)
-    model.calls = calls
-    return model
 
 
 async def finished(case_id: int):
@@ -127,7 +113,7 @@ async def test_a_valid_draft_passes_and_is_recorded_on_the_run():
     store, run_id = await finished(23)
     source = from_run(store, run_id)
 
-    draft = await drafter.draft(store, source, model=model_returning(GOOD))
+    draft = await drafter.draft(store, source, model=drafter_model(GOOD))
 
     assert draft.ok and draft.yaml == GOOD and draft.problems == []
     event = store.last_event(run_id, "playbook_drafted").payload
@@ -137,7 +123,7 @@ async def test_a_valid_draft_passes_and_is_recorded_on_the_run():
 
 async def test_a_failing_draft_gets_one_retry_with_the_problems():
     store, run_id = await finished(23)
-    model = model_returning(WIDENED, GOOD)
+    model = drafter_model(WIDENED, GOOD)
 
     draft = await drafter.draft(store, from_run(store, run_id), model=model)
 
@@ -149,7 +135,7 @@ async def test_a_failing_draft_gets_one_retry_with_the_problems():
 async def test_two_failures_return_the_draft_with_its_problems():
     store, run_id = await finished(23)
 
-    draft = await drafter.draft(store, from_run(store, run_id), model=model_returning(WIDENED))
+    draft = await drafter.draft(store, from_run(store, run_id), model=drafter_model(WIDENED))
 
     assert not draft.ok and draft.yaml == WIDENED
     assert "allowed_actions has tap.create, which the run it was learned from never did." in draft.problems

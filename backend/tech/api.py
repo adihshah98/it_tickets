@@ -9,13 +9,21 @@
     POST /runs/{id}/approval         approve (with confirm answers) or reject; executes in the background
     POST /runs/{id}/resume           carry on an execution a dead process left in EXECUTING
     POST /followups/{id}/run-now     run a scheduled follow-up now (the demo's license assignment)
+    POST /runs/{id}/playbook-draft   "Save as playbook": the drafter's YAML from a finished run (not saved)
+    POST /playbooks                  a written playbook (prose or YAML) -> a draft (not saved)
+    POST /playbooks/{intent}/approve save a draft (as edited) as the intent's next version, at an autonomy level
+    POST /playbooks/{intent}/autonomy set the client's autonomy for an intent, within its ceiling
+    GET  /playbooks                  every intent with a playbook: version, source, autonomy, ceiling
+    GET  /playbooks/{intent}         one intent: the current YAML and every version
     GET  /l/{token}                  one-time link: who it's for and when it expires, never the TAP
     POST /l/{token}/reveal           one-time link: the TAP, once
 
 Requests that start work answer 202 at once; the work runs as a tracked task and shows up on the event
 stream. Checks that can fail (wrong state, not an approver, bad answers) run before the 202, so the
 caller gets a 409 rather than an event. A task that crashes escalates its run (kind "error") instead of
-leaving it stuck mid-state.
+leaving it stuck mid-state. A playbook or autonomy level that fails its checks is a 422 listing every
+problem (`detail`). Drafting is awaited, not a background task: it is one model call, with no run state
+to move, and the caller wants the YAML back.
 
 The event bus is in-process: a run driven by the CLI replays here, but its live events reach only the
 CLI's own process.
@@ -36,9 +44,12 @@ from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
 
 from tech import closeout, runner
+from tech.agents.drafter import Draft, draft
 from tech.core.config import Settings
 from tech.core.store import Event, NotFound, RunState, Store
 from tech.execution import links, scheduler
+from tech.learning.sources import from_written
+from tech.playbooks import PlaybookLibrary, PlaybookRejected
 
 TERMINAL = {s.value for s in runner.TERMINAL}
 DEFAULT_WEB_ORIGIN = "http://localhost:3000"
@@ -221,6 +232,43 @@ class OobIn(BaseModel):
     by: str  # the technician who reached the manager
 
 
+class DraftIn(BaseModel):
+    intent: str | None = None  # names the job when the proposed one is wrong or "unknown"
+    notes: list[str] = []      # the technician's
+
+
+class WrittenIn(BaseModel):
+    intent: str
+    text: str = Field(min_length=1, description="the playbook in plain English, or as YAML")
+    allowed_actions: list[str] = Field(min_length=1)
+    by: str = Field(min_length=1)
+
+
+class ApproveIn(BaseModel):
+    yaml: str = Field(min_length=1)
+    autonomy: Literal["A1", "A2", "A3"]
+    by: str = Field(min_length=1)
+    source: Literal["agent_run", "technician_run", "written", "audit_log"]
+    source_run_id: int | None = None
+
+
+class AutonomyIn(BaseModel):
+    level: Literal["A1", "A2", "A3"]
+    by: str = Field(min_length=1)
+
+
+def draft_view(d: Draft) -> dict[str, Any]:
+    return {"intent": d.intent, "yaml": d.yaml, "problems": d.problems, "ok": d.ok, "source": d.source.kind,
+            "source_run_id": d.source.run_id}
+
+
+def playbook_view(library: PlaybookLibrary, intent: str) -> dict[str, Any]:
+    row = library.current(intent)
+    return {"intent": intent, "version": row.version, "source": row.source, "source_run_id": row.source_run_id,
+            "approved_by": row.approved_by, "created_at": row.created_at.isoformat(),
+            "autonomy": library.autonomy().get(intent, "A2"), "ceiling": library.current_ceiling(intent)}
+
+
 # ------------------------------------------------------------------ app
 
 
@@ -253,6 +301,10 @@ def create_app(runtime: runner.Runtime | None = None, *, web_origin: str = DEFAU
     @app.exception_handler(runner.RunError)
     async def refused(request: Request, exc: runner.RunError) -> JSONResponse:
         return JSONResponse({"detail": str(exc)}, status_code=409)
+
+    @app.exception_handler(PlaybookRejected)
+    async def rejected(request: Request, exc: PlaybookRejected) -> JSONResponse:
+        return JSONResponse({"detail": exc.problems}, status_code=422)
 
     @app.exception_handler(NotFound)
     async def not_found(request: Request, exc: NotFound) -> JSONResponse:
@@ -318,6 +370,41 @@ def create_app(runtime: runner.Runtime | None = None, *, web_origin: str = DEFAU
         # a failed follow-up is reported on the run's stream; it doesn't escalate a finished run
         tasks.spawn(row.run_id, runner.run_followup(rt, followup_id), what="followup", escalate=False)
         return {"followup_id": followup_id, "run_id": row.run_id}
+
+    @app.post("/runs/{run_id}/playbook-draft")
+    async def playbook_draft(run_id: int, body: DraftIn) -> dict[str, Any]:
+        return draft_view(await runner.draft_playbook(rt, run_id, intent=body.intent, notes=body.notes))
+
+    @app.post("/playbooks")
+    async def written_playbook(body: WrittenIn) -> dict[str, Any]:
+        source = from_written(body.intent, body.text, body.allowed_actions, body.by)
+        return draft_view(await draft(None, source, model=rt.drafter_model))
+
+    @app.post("/playbooks/{intent}/approve", status_code=201)
+    async def approve_playbook(intent: str, body: ApproveIn) -> dict[str, Any]:
+        rt.library.approve(intent, body.yaml, autonomy=body.autonomy, by=body.by, source=body.source,
+                           source_run_id=body.source_run_id)
+        return playbook_view(rt.library, intent)
+
+    @app.post("/playbooks/{intent}/autonomy")
+    async def playbook_autonomy(intent: str, body: AutonomyIn) -> dict[str, Any]:
+        if not rt.library.has(intent):
+            raise HTTPException(404, f"no playbook for {intent!r}")
+        rt.library.set_autonomy(intent, body.level, by=body.by)
+        return playbook_view(rt.library, intent)
+
+    @app.get("/playbooks")
+    async def list_playbooks() -> list[dict[str, Any]]:
+        return [playbook_view(rt.library, intent) for intent in rt.library.intents()]
+
+    @app.get("/playbooks/{intent}")
+    async def get_playbook(intent: str) -> dict[str, Any]:
+        if not rt.library.has(intent):
+            raise HTTPException(404, f"no playbook for {intent!r}")
+        versions = [{"version": v.version, "status": v.status, "source": v.source, "source_run_id": v.source_run_id,
+                     "approved_by": v.approved_by, "created_at": v.created_at.isoformat()}
+                    for v in rt.library.versions(intent)]
+        return playbook_view(rt.library, intent) | {"yaml": rt.library.current(intent).yaml, "versions": versions}
 
     @app.get("/l/{token}")
     async def view_link(token: str) -> dict[str, Any]:

@@ -29,6 +29,24 @@ def drafts_model(reply: str = "Hi Taylor, Priya is set up. Sign-in link: {{link}
     return model
 
 
+def drafter_model(*texts: str):
+    """A FunctionModel standing in for Opus as the drafter: each call submits the next YAML text (the last
+    one repeats). `.calls` keeps the messages of each call."""
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+
+    calls: list = []
+
+    def respond(messages, info):
+        calls.append(messages)
+        text = texts[min(len(calls), len(texts)) - 1]
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"yaml": text})])
+
+    model = FunctionModel(respond)
+    model.calls = calls
+    return model
+
+
 DOMAIN = "NorthwindParking.onmicrosoft.com"
 MARCUS = "8a590663-09f2-4ee8-ab1a-6195ca3943f9"
 SPB = "cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46"
