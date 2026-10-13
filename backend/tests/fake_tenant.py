@@ -56,6 +56,7 @@ class FakeTenant:
         self.deleted_methods: dict[str, list[dict]] = {}
         self.drives: dict[str, str] = {}            # groupId (lower) -> driveId, for groups with a team site
         self.files: dict[str, dict] = {}            # itemId -> {id, name, drive, versions (newest first)}
+        self.contents: dict[tuple[str, str], bytes] = {}  # (itemId, versionId) -> that version's bytes
         self.search_lag = 0  # searches that find nothing yet (the index trails a fresh upload)
         self.seat_holder = self.add_user("seat-holder", "Seat Holder")
 
@@ -106,6 +107,8 @@ class FakeTenant:
                  "lastModifiedBy": {"user": {"displayName": "SharePoint App"}}}
                 for n, (when, size) in enumerate(versions, 1)]
         self.files[item_id] = {"id": item_id, "name": name, "drive": drive_id, "versions": rows[::-1]}
+        for r in rows:  # distinct bytes per version, `size` long
+            self.contents[(item_id, r["id"])] = (f"{name} {r['id']} ".encode() * r["size"])[:r["size"]]
         return item_id, [r["id"] for r in rows]
 
     def _item(self, item: dict) -> dict:
@@ -124,6 +127,15 @@ class FakeTenant:
                                                        if all(w in f["name"].casefold() for w in words)]})
         if rest == "/root/children":
             return httpx.Response(200, json={"value": [self._item(f) for f in items]})
+        if m := re.fullmatch(r"/items/([^/]+)(?:/versions/([^/]+))?/content", rest):
+            if (item := self.files.get(m.group(1))) is None:
+                return error(404, "The resource could not be found.", "itemNotFound")
+            version = m.group(2) or item["versions"][0]["id"]
+            if m.group(2) == item["versions"][0]["id"]:  # Graph won't serve the current version this way
+                return error(400, "The request is malformed or incorrect.", "invalidRequest")
+            if (data := self.contents.get((item["id"], version))) is None:
+                return error(404, "The resource could not be found.", "itemNotFound")
+            return httpx.Response(200, content=data, headers={"Content-Type": "application/octet-stream"})
         m = re.fullmatch(r"/items/([^/]+)/versions(?:/([^/]+)/restoreVersion)?", rest)
         if not m or (item := self.files.get(m.group(1))) is None or item["drive"] != drive_id:
             return error(404, "The resource could not be found.", "itemNotFound")
@@ -134,6 +146,7 @@ class FakeTenant:
             if chosen is None:
                 return error(404, "The resource could not be found.", "itemNotFound")
             major = max(int(v["id"].split(".")[0]) for v in item["versions"]) + 1
+            self.contents[(item["id"], f"{major}.0")] = self.contents[(item["id"], chosen["id"])]
             item["versions"].insert(0, chosen | {"id": f"{major}.0", "lastModifiedDateTime": datetime.now(UTC)
                                                  .strftime("%Y-%m-%dT%H:%M:%SZ"),
                                                  "lastModifiedBy": {"application": {"displayName": "Microsoft Graph"}}})

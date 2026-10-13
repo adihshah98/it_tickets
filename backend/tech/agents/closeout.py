@@ -29,6 +29,11 @@ from tech.playbooks import Playbook
 MODEL = "anthropic:claude-sonnet-5-5"
 TIMEOUT_S = 45.0
 LINK_PLACEHOLDER = "{{link}}"
+# What the requester should hear whenever a step of this action was done, playbook or not.
+REPLY_NOTES = {
+    "file.restoreVersion": "Restoring a version creates a new version of the file; nothing is lost. The "
+                           "overwritten version is still in the file's version history.",
+}
 DRAFT_ERRORS: tuple[type[Exception], ...] = (ModelAPIError, UnexpectedModelBehavior, ContentFilterError,
                                              TimeoutError)
 SETTINGS = AnthropicModelSettings(anthropic_effort="low", anthropic_cache_instructions=True)
@@ -46,6 +51,7 @@ reply_subject and reply_body: to the requester (requester.name). Plain text, sho
 - Items under needs_technician: say a technician is handling them now.
 - Scheduled follow-ups, such as a license on the start date: say when.
 - Anything in out_of_scope_requests: say it was not done and needs a separate request.
+- Each line under notes: say it in plain words.
 
 psa_note: for a technician reading the ticket later. Terse lines: what was done (UPN, group names),
 definition-of-done results, follow-ups, items handed to a technician, requests declined.
@@ -87,6 +93,7 @@ def build_context(store: Store, run_id: int, plan: Plan, probes: list[Probe], *,
         "out_of_scope_requests": plan.out_of_scope_requests,
         "definition_of_done": [p.payload() for p in probes],
         "gotchas": playbook.gotchas if playbook else [],
+        "notes": [REPLY_NOTES[a] for a in dict.fromkeys(d["action"] for d in done) if a in REPLY_NOTES],
     }
 
 

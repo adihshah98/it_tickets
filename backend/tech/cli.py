@@ -133,6 +133,8 @@ async def continue_run(run_id: int, action: Callable[[runner.Runtime], Awaitable
             await action(rt)
         for row in scheduler.for_run(rt.store, run_id):
             print(f"   follow-up {row.id}: {row.kind} at {row.run_at:%Y-%m-%d %H:%M}  [{row.status}]")
+        if runner.can_save_playbook(rt.store, run_id):
+            print("   no playbook for this ticket type: this run can be saved as one", flush=True)
         return exit_code(rt.store, run_id)
 
     return await with_runtime(work)

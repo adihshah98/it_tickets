@@ -6,7 +6,7 @@ from datetime import timedelta
 
 import httpx
 import pytest
-from conftest import DOMAIN, SPB, TAYLOR
+from conftest import DOMAIN, SPB, TAYLOR, drafts_model
 from fake_tenant import TAP_VALUE
 
 from tech import api, runner
@@ -309,3 +309,29 @@ async def test_snapshot_closeout_is_empty_before_execution(client, gated):
     run_id = gated()
     assert (await client.get(f"/runs/{run_id}")).json()["closeout"] == {
         "checks": [], "messages": [], "blocked": [], "time_entry": None}
+
+
+# ------------------------------------------------------------------ "Save as playbook" (Build-W4 Day 18)
+
+
+async def test_a_finished_no_playbook_run_can_be_saved_as_a_playbook(app, client, rt, restore_gated):
+    rt.closeout_model = drafts_model(reply="Hi Sophie, it's restored; nothing is lost.")
+    run_id, _, _ = restore_gated()
+    assert (await client.get(f"/runs/{run_id}")).json()["can_save_playbook"] is False  # not finished yet
+
+    r = await client.post(f"/runs/{run_id}/approval", json={"by": "tgarcia"})
+    assert r.status_code == 202, r.text
+    await drained(app)
+    snap = (await client.get(f"/runs/{run_id}")).json()
+    assert snap["run"]["state"] == "DONE" and snap["can_save_playbook"] is True
+
+
+async def test_a_playbook_run_or_an_escalated_one_cant_be_saved(app, client, rt, gated, restore_gated, tenant):
+    done = await approved_run(app, client, gated)
+    assert rt.store.get_run(done).state == RunState.DONE
+    assert (await client.get(f"/runs/{done}")).json()["can_save_playbook"] is False      # it has a playbook
+
+    rejected, _, _ = restore_gated()
+    await client.post(f"/runs/{rejected}/approval", json={"by": "tgarcia", "decision": "reject"})
+    await drained(app)
+    assert (await client.get(f"/runs/{rejected}")).json()["can_save_playbook"] is False  # escalated, nothing done

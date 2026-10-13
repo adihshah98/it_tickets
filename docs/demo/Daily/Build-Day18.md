@@ -14,7 +14,7 @@ Each part ends with green tests and a commit, then a stop for review.
 | ---- | ---- | ----------------- | ------ |
 | 0 | Live spike: search lag and what a restore does to the file (read-mostly) | None | **Done** |
 | 1 | `file.restoreVersion` four-touch + FakeTenant drives + file-ID grounding; #24 | New action; shipped intents unchanged | **Done** |
-| 2 | No-playbook close-out: DoD, reply note, `can_save_playbook`; #23 | Close-out for no-playbook runs only | Planned |
+| 2 | No-playbook close-out: DoD, reply note, `can_save_playbook`; #23 | Close-out for no-playbook runs only | **Done** |
 | 3 | Live: reset, Sophie via the CLI, `test_live_file_restore.py` | None (proof) | Planned |
 
 **Needs your approval:** Part 0's one test restore on the tenant, and all of Part 3 (tenant reset, live model
@@ -235,7 +235,7 @@ This confirms decision 1: none of these are GUIDs.
 - `tenant/seed.py`'s ruff warnings are the 17 it had before (line length); none are new.
 - No live run: Part 3 does that.
 
-## Part 2: no-playbook close-out, #23
+## Part 2 (done): no-playbook close-out, #23
 
 **Product code:**
 
@@ -271,6 +271,44 @@ This confirms decision 1: none of these are GUIDs.
 
 **Gate:** `uv run pytest` green: 386 tests plus Part 2's new ones, with #27 and #28 the only xfails. The
 three shipped intents' gate decisions are unchanged. `ruff` is clean.
+
+**As built:**
+
+- **`version_restored`** downloads the chosen version (`versions/{v}/content`) and the current file
+  (`items/{i}/content`, since the current version's own URL is a 400) and compares their SHA-256. It
+  re-reads with `settled()` before failing. The detail reads "Q3 Parking Rates.xlsx is version 2.0 again
+  (now 4.0)".
+- **`GraphClient.content(path)`** is new: a bytes GET that follows Graph's redirect to the download URL.
+  httpx drops the Authorization header when it changes host. It doesn't retry, because only probes use it,
+  and a probe turns a Graph error into a failed check.
+- **No-playbook DoD:** `closeout.no_playbook_dod(plan)` is a `Playbook` built in code. Its DoD is one probe
+  per action in `dod.NO_PLAYBOOK_PROBES` (today `file.restoreVersion` → `version_restored`), then
+  `message_sent: {to: $requester}`. It is used when no triaged intent has a playbook and the plan has
+  steps.
+- **`message_sent`** checks the link only for `via: one_time_link`. Onboarding and MFA say that, and
+  offboarding has no `message_sent`. The detail is now "reply to …" when no link is required. The
+  linter's rule 4 follows the same rule.
+- **`REPLY_NOTES`** (`agents/closeout.py`) adds a `notes` list to the close-out context for each action
+  done, and the instructions say to put each note in plain words. The restore note is "creates a new
+  version; nothing is lost; the overwritten version is still in the history".
+- **`runner.can_save_playbook(store, run_id)`** is used by the API snapshot (`can_save_playbook`) and by
+  the CLI. After an approval, the CLI prints "no playbook for this ticket type: this run can be saved as
+  one".
+- **Tests:**
+  - conftest has a `restore_gated` fixture: Sophie's no-playbook restore, through the real gate, awaiting
+    approval;
+  - FakeTenant serves version content and gives the current version's `versions/{v}/content` a 400, as
+    Graph does.
+
+**Result:**
+
+- `uv run pytest`: 398 passed, 2 xfailed. #27 and #28 still need the learned-playbook store (`--runxfail`
+  shows the Day 19 `NotImplementedError`s).
+- `ruff check backend` is clean.
+- The shipped intents' gate decisions and DoDs are unchanged. The "reply and one-time link" detail is the
+  same for onboarding and MFA, and a test pins that both still require the link.
+- **Not tested offline:** the CLI line, because `continue_run` needs real settings. It gets checked in
+  Part 3.
 
 ## Part 3: live (needs approval: tenant writes and model spend)
 

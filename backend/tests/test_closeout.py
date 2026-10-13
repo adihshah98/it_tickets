@@ -4,16 +4,18 @@ import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
-from conftest import DOMAIN, TAYLOR, drafts_model
+from conftest import DOMAIN, MARCUS, SOPHIE, TAYLOR, drafts_model, step
 from fake_tenant import TAP_VALUE
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.models.function import FunctionModel
 
 from tech import runner
-from tech.agents.closeout import LINK_PLACEHOLDER, CloseoutDrafts, build_context, draft
-from tech.closeout import WORK_TYPE, with_link, work_minutes
+from tech.agents.closeout import LINK_PLACEHOLDER, REPLY_NOTES, CloseoutDrafts, build_context, draft
+from tech.closeout import WORK_TYPE, no_playbook_dod, with_link, work_minutes
+from tech.core.models import Plan
 from tech.core.store import RunState
 from tech.execution import dod, links
 from tech.playbooks import load_playbook
@@ -152,3 +154,53 @@ def test_a_two_intent_run_is_checked_on_both_playbooks():
     assert {"user_exists", "tap_active", "message_sent", "sessions_revoked"} <= set(names)
     assert names.count("needs_technician_listed") == 1  # in both playbooks, probed once
     assert dod_playbook({}) is None
+
+
+# ------------------------------------------------------------------ no playbook (Build-W4 Day 18)
+
+RESTORED = "Hi Sophie, Q3 Parking Rates is back to yesterday afternoon's version. Nothing is lost."
+
+
+async def test_a_no_playbook_restore_closes_out_on_its_own_dod(rt, restore_gated):
+    rt.closeout_model = model = drafts_model(reply=RESTORED, note="Restored Q3 Parking Rates.xlsx to 2.0")
+    run_id, _, _ = restore_gated()
+
+    assert await runner.approve(rt, run_id, by=TAYLOR) == RunState.DONE
+    checks = payloads(rt, run_id, "done_check")
+    assert [(c["probe"], c["ok"]) for c in checks] == [("version_restored", True), ("message_sent", True)]
+    assert "Q3 Parking Rates.xlsx is version 2.0 again (now 4.0)" in checks[0]["detail"]
+    assert checks[1]["detail"] == f"reply to {SOPHIE}"                          # no one-time link asked for
+    assert {m["kind"] for m in payloads(rt, run_id, "message_sent")} == {"reply", "psa_note"}
+    assert payloads(rt, run_id, "time_entry")[0]["work_type"] == WORK_TYPE
+    assert "nothing is lost" in str(model.prompts[0])                             # the restore note reached Sonnet
+
+
+async def test_a_restore_whose_content_doesnt_match_holds_the_reply(rt, restore_gated, tenant):
+    run_id, _, item = restore_gated()
+    real = tenant._drive_route
+
+    def corrupt(method, drive_id, rest):  # the item's current bytes aren't version 2.0's
+        if rest == f"/items/{item}/content":
+            return httpx.Response(200, content=b"something else")
+        return real(method, drive_id, rest)
+
+    tenant._drive_route = corrupt
+    assert await runner.approve(rt, run_id, by=TAYLOR) == RunState.ESCALATED
+    assert rt.store.last_event(run_id, "state").payload["failed_probes"] == ["version_restored", "message_sent"]
+    assert payloads(rt, run_id, "message_blocked")[0]["reason"] == "dod"
+    assert [m["kind"] for m in payloads(rt, run_id, "message_sent")] == ["psa_note"]
+
+
+def test_the_no_playbook_dod_is_a_probe_per_action_that_has_one_then_the_reply():
+    plan = Plan.model_validate({"intent": "unknown", "summary": "x", "steps": [
+        step("rename", "user.update", {"userId": MARCUS, "jobTitle": "Lead"}, "write.reversible")]})
+    assert no_playbook_dod(plan).definition_of_done == [{"message_sent": {"to": "$requester"}}]
+    assert no_playbook_dod(plan.model_copy(update={"steps": []})) is None
+
+
+async def test_the_context_carries_the_note_for_each_action_done(rt, restore_gated):
+    run_id, plan, _ = restore_gated()
+    await runner.approve(rt, run_id, by=TAYLOR)
+    context = build_context(rt.store, run_id, plan, [], requester=REQUESTER, playbook=None)
+    assert context["notes"] == [REPLY_NOTES["file.restoreVersion"]]
+    assert context_for(rt, run_id, plan.model_copy(update={"steps": []}))["notes"] == []

@@ -199,6 +199,7 @@ def snapshot(store: Store, run_id: int, web_origin: str, domain: str) -> dict[st
                        "status": f.status} for f in scheduler.for_run(store, run_id)],
         "links": link_rows,
         "closeout": closeout.view(store, run_id, link_rows),
+        "can_save_playbook": runner.can_save_playbook(store, run_id),
     }
 
 

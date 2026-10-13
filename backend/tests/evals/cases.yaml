@@ -762,7 +762,6 @@ cases:
            params: {driveId: "${nw_ops_drive}", itemId: "${q3_rates}", versionId: "${q3_v2}"},
            expected: {currentMatches: "${q3_v2}"}}
     then: [{approve: tgarcia}]
-    xfail: "Week 4 Day 18 part 2: the no-playbook close-out (version_restored, message_sent)"
     expect:
       gate: {restore: approve/no_playbook.approve}
       after_start: AWAITING_APPROVAL

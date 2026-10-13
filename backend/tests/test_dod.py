@@ -1,6 +1,6 @@
 """DoD probes against the fake tenant: what passes after a clean run, and each way a check fails."""
 
-from conftest import DOMAIN, FINANCE_FILES, MARCUS, RDS_USERS, TAYLOR, group, plan_with
+from conftest import DOMAIN, FINANCE_FILES, MARCUS, RDS_USERS, SOPHIE, TAYLOR, group, plan_with
 
 from tech.core.models import TechnicianItem
 from tech.execution import dod
@@ -120,3 +120,38 @@ async def test_a_graph_error_is_a_failed_check(rt, executed, tenant):
     tenant.fail("GET", f"/users/{priya(tenant)}", 403)
     probe = (await dod.check(ctx(rt, run_id, plan), playbook(), only=("user_exists",)))[0]
     assert not probe.ok and "403" in probe.detail
+
+
+# ------------------------------------------------------------------ file restore and the plain reply (Day 18)
+
+
+def test_every_shipped_reply_probe_still_requires_the_one_time_link():
+    for intent in ("user.onboard", "mfa.reset"):
+        [item] = [i for i in load_playbook(intent, DOMAIN).definition_of_done if "message_sent" in i]
+        assert item["message_sent"]["via"] == "one_time_link"
+
+
+async def test_message_sent_without_via_needs_only_the_reply(rt, restore_gated):
+    run_id, plan, _ = restore_gated()
+    check = dod.PROBES["message_sent"]
+    assert not (await check(ctx(rt, run_id, plan, SOPHIE), {})).ok                  # no reply yet
+    rt.store.append_event(run_id, "message_sent", {"kind": "reply", "to": SOPHIE, "subject": "s", "text": "t"})
+    assert (await check(ctx(rt, run_id, plan, SOPHIE), {})).ok
+    linked = await check(ctx(rt, run_id, plan, SOPHIE), {"via": "one_time_link"})
+    assert not linked.ok and "no one-time link" in linked.detail
+
+
+async def test_version_restored_compares_the_current_bytes_with_the_chosen_version(rt, restore_gated, tenant):
+    run_id, plan, item = restore_gated()
+    probe = dod.PROBES["version_restored"]
+    before = await probe(ctx(rt, run_id, plan, SOPHIE), {})
+    assert not before.ok and "current content isn't version 2.0's" in before.detail
+    await rt.graph.post(f"/drives/{tenant.files[item]['drive']}/items/{item}/versions/2.0/restoreVersion")
+    after = await probe(ctx(rt, run_id, plan, SOPHIE), {})
+    assert after.ok and after.detail == "Q3 Parking Rates.xlsx is version 2.0 again (now 4.0)"
+
+
+async def test_version_restored_fails_without_a_restore_step(rt, executed):
+    run_id, plan = await executed()
+    assert (await dod.PROBES["version_restored"](ctx(rt, run_id, plan), {})).detail == (
+        "no file.restoreVersion step in this run")

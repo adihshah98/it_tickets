@@ -516,7 +516,7 @@ async def test_live(case):
 # ------------------------------------------------------------------ the harness itself
 
 
-WEEK_4_LANDED = {24, 25, 26}  # Week 4 cases whose feature is in (Day 17: the no-playbook path; Day 18: files)
+WEEK_4_LANDED = {23, 24, 25, 26}  # Week 4 cases whose feature is in (Day 17: the no-playbook path; Day 18: files)
 
 
 def test_cases_cover_tech_md_section_11():

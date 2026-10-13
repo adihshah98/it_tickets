@@ -229,3 +229,43 @@ def executed(rt, gated, tenant):
         return run_id, plan
 
     return make
+
+
+SOPHIE = f"sbaker@{DOMAIN}"
+RATES_VERSIONS = [("2026-10-12T14:20:00Z", 12712), ("2026-10-12T16:45:00Z", 12755), ("2026-10-13T09:05:00Z", 12606)]
+
+
+@pytest.fixture
+def restore_gated(rt, tenant):
+    """Sophie's file restore with no playbook, through the real gate and awaiting approval: (run_id, plan, item)."""
+    from tech.core.models import Requester, Triage, TriageEntities
+    from tech.core.store import RunState
+    from tech.safety import gate
+
+    def make(version: str = "2.0") -> tuple[int, Plan, str]:
+        drive = tenant.add_drive(ACCOUNTING)
+        item, _ = tenant.add_file(drive, "Q3 Parking Rates.xlsx", RATES_VERSIONS)
+        plan = Plan.model_validate({"intent": "file.restore_version", "summary": "restore", "steps": [
+            step("restore", "file.restoreVersion", {"driveId": drive, "itemId": item, "versionId": version,
+                                                    "fileName": "Q3 Parking Rates.xlsx"}, "write.reversible")
+            | {"expected": {"currentMatches": version}}]})
+        transcript = Transcript()
+        transcript.record("files.search", {"query": "Q3"}, [{"drive_id": drive, "item_id": item, "name": "x"}])
+        transcript.record("files.versions", {"drive_id": drive, "item_id": item},
+                          [{"id": v} for v in ("3.0", "2.0", "1.0")])
+        store = rt.store
+        run_id = store.create_run(store.create_ticket("I saved over Q3 Parking Rates", SOPHIE).id).id
+        triage = Triage(intents=["file.restore_version"], entities=TriageEntities(),
+                        requester=Requester(name="Sophie Baker", email=SOPHIE))
+        store.append_event(run_id, "triage", {"triage": triage.model_dump(mode="json"),
+                                              "requester_approved": True, "requester_scopes": {}})
+        for state in (RunState.TRIAGED, RunState.INVESTIGATING):
+            store.set_state(run_id, state)
+        store.append_event(run_id, "plan", {"plan": plan.model_dump(mode="json", by_alias=True), "usage": {},
+                                            "no_playbook": True})
+        store.set_state(run_id, RunState.PLAN_PROPOSED)
+        gate.check(store, run_id, plan, requester_approved=True, intents=triage.intents, playbooks={},
+                   facts=rt.facts, autonomy=rt.library.autonomy(), transcript=transcript)
+        return run_id, plan, item
+
+    return make

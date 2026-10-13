@@ -65,6 +65,7 @@ DOD_PRODUCERS: dict[str, set[str]] = {
     "oob_confirmed": {"tap.create", "authMethod.delete"},  # a credential write means OOB was required first
     "old_methods_removed": {"authMethod.delete"},
     "followup_scheduled": {"followup.schedule"},
+    "version_restored": {"file.restoreVersion"},
 }
 # Probes the plan satisfies by structure (a needs_technician entry), not by a write.
 STRUCTURAL_DOD = {"needs_technician_listed"}
@@ -223,9 +224,11 @@ def _dod_problems(playbook: Playbook, actions: set[str]) -> list[str]:
     """Rule 4: every required DoD item has a step whose action could satisfy it."""
     problems: list[str] = []
     for item in playbook.definition_of_done:
-        name = next(iter(item))
+        name, args = next(iter(item.items()))
         if name in STRUCTURAL_DOD or name in OPTIONAL_DOD:
             continue
+        if name == "message_sent" and (args or {}).get("via") != "one_time_link":
+            continue  # a plain reply is close-out's, not a step's
         producers = DOD_PRODUCERS.get(name)
         if producers and not (producers & actions):
             makers = " or ".join(sorted(producers))

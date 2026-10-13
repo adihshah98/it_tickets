@@ -134,6 +134,14 @@ def findings(store: Store, run_id: int) -> list[str]:
     return [e.payload["text"] for e in store.events_of(run_id, "finding")]
 
 
+def can_save_playbook(store: Store, run_id: int) -> bool:
+    """A finished no-playbook run that changed something can become a playbook draft (Build-W4 "Save as
+    playbook"). Day 19-20 widen this to escalated, A1 and technician runs."""
+    plan = store.last_event(run_id, "plan")
+    return (store.get_run(run_id).state == S.DONE and plan is not None and bool(plan.payload.get("no_playbook"))
+            and any(not e.payload.get("skipped") for e in store.events_of(run_id, "step_verified")))
+
+
 # ------------------------------------------------------------------ out-of-band confirmation (MFA reset)
 
 

@@ -1,7 +1,8 @@
 """Close-out (Tech.MD §4.8): what happens once every step has verified. The runner calls `close_out`.
 
   1. DoD probes (code, execution/dod.py) against live state; each is a done_check event. The DoD is every
-     triaged intent's playbook's, so a two-intent plan is checked on both halves.
+     triaged intent's playbook's, so a two-intent plan is checked on both halves. A run with no playbook
+     gets one built in code (no_playbook_dod): a probe per action that has one, and the reply.
   2. Sonnet drafts the reply and the PSA note (agents/closeout.py). A model error is an error event.
   3. The secret scanner checks each text against patterns and every secret the run holds (the TAP, the
      new user's password, link tokens). A hit blocks that text: message_blocked, with hit kinds and
@@ -83,13 +84,24 @@ def dod_playbook(playbooks: dict[str, Playbook]) -> Playbook | None:
     return first.model_copy(update={"definition_of_done": list(items.values())})
 
 
+def no_playbook_dod(plan: Plan) -> Playbook | None:
+    """The DoD of a run with no playbook (Tech.MD §4.9). Every step already verified on the way to CLOSING,
+    so this adds what a verify can't show: the outcome probes and that the requester got a reply."""
+    if not plan.steps:
+        return None
+    actions = list(dict.fromkeys(s.action for s in plan.steps))
+    items = [{dod.NO_PLAYBOOK_PROBES[a]: {}} for a in actions if a in dod.NO_PLAYBOOK_PROBES]
+    return Playbook(intent=plan.intent, goal="no playbook: the plan's own steps", must_investigate=[],
+                    definition_of_done=[*items, {"message_sent": {"to": "$requester"}}], allowed_actions=actions)
+
+
 async def close_out(store: Store, graph: GraphClient, run_id: int, plan: Plan, *, facts: ClientFacts,
                     library: PlaybookLibrary, secrets: Secrets, model: Any = CLOSEOUT_MODEL,
                     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> list[str]:
     """Run the close-out for an executed run (state CLOSING). Returns the names of failed DoD probes."""
     triage = store.last_event(run_id, "triage").payload["triage"]
     requester = {"name": triage["requester"]["name"], "email": triage["requester"]["email"]}
-    playbook = dod_playbook(library.for_intents([plan.intent, *triage["intents"]]))
+    playbook = dod_playbook(library.for_intents([plan.intent, *triage["intents"]])) or no_playbook_dod(plan)
     ctx = dod.DodContext(store, graph, run_id, plan, facts, requester["email"], sleep=sleep)
 
     probes = await dod.check(ctx, playbook, exclude=("message_sent",)) if playbook else []

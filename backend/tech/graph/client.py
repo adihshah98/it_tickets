@@ -160,6 +160,14 @@ class GraphClient:
     async def delete(self, path: str, **kw: Any) -> Any:
         return await self.request("DELETE", path, **kw)
 
+    async def content(self, path: str) -> bytes:
+        """A file's bytes. Graph answers `…/content` with a redirect to a pre-authenticated download URL;
+        httpx drops the Authorization header when it follows it to another host. No retries: probes use it."""
+        resp = await self._http.get(GRAPH + path, headers=await self._auth(), follow_redirects=True)
+        if resp.is_error:
+            raise GraphError(resp)
+        return resp.content
+
     async def list(self, path: str, params: dict[str, str] | None = None, **kw: Any) -> AsyncIterator[dict]:
         page = await self.get(path, params=params, **kw)
         while True:

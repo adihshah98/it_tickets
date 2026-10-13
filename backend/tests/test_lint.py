@@ -16,6 +16,7 @@ from conftest import (
 
 from tech.core.models import Plan
 from tech.graph.reads import Transcript
+from tech.playbooks import Playbook
 from tech.safety.lint import lint
 
 INVENTED = "00000000-1111-2222-3333-444444444444"
@@ -152,6 +153,16 @@ def test_a_restore_of_a_listed_earlier_version_is_grounded(facts):
 def test_a_restore_must_name_a_file_and_version_the_investigation_saw(facts, plan, expect):
     [found] = problems(plan, file_transcript(), {}, facts)
     assert found.startswith("Step restore: ") and expect in found
+
+
+def test_a_dod_reply_without_a_link_needs_no_link_step(facts):
+    """A learned restore playbook's DoD (Day 19): the restore probe needs its step, a plain reply needs none."""
+    learned = Playbook(intent="file.restore_version", goal="x", must_investigate=[], allowed_actions=[
+        "file.restoreVersion"], definition_of_done=[{"version_restored": {}}, {"message_sent": {"to": "$requester"}}])
+    assert problems(restore(), file_transcript(), {"file.restore_version": learned}, facts) == []
+    empty = Plan.model_validate({"intent": "file.restore_version", "summary": "x", "steps": []})
+    [found] = problems(empty, file_transcript(), {"file.restore_version": learned}, facts)
+    assert "'version_restored'; add a file.restoreVersion step" in found
 
 
 def test_an_escalation_passes(transcript, playbooks, facts):

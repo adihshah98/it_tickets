@@ -15,6 +15,7 @@ show the old state. Those probes re-read on SETTLE_DELAYS before they fail, like
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass, field
 from typing import Any
@@ -24,7 +25,7 @@ from tech.core.store import Store
 from tech.execution import links, scheduler
 from tech.execution.catalogue import ACTIONS
 from tech.graph.client import GraphClient, GraphError
-from tech.graph.writes import auth_method_ids, get_or_none, license_skus, member_group_ids, same
+from tech.graph.writes import auth_method_ids, file_versions, get_or_none, license_skus, member_group_ids, same
 from tech.playbooks import ClientFacts, Playbook
 
 NO_USER = "no user.create step verified in this run"
@@ -205,11 +206,13 @@ async def message_sent(ctx: DodContext, args: dict[str, Any]) -> Probe:
         user = await get_or_none(ctx.graph, f"/users/{subject}", params={"$select": "id,userPrincipalName,mail"})
         allowed |= {v.casefold() for v in (user or {}).values() if isinstance(v, str) and "@" in v}
     problems = []
-    if not any(link.to.casefold() in allowed for link in links.for_run(ctx.store, ctx.run_id)):
+    via_link = args.get("via") == "one_time_link"  # every shipped playbook; a file restore sends no link
+    if via_link and not any(link.to.casefold() in allowed for link in links.for_run(ctx.store, ctx.run_id)):
         problems.append(f"no one-time link to {ctx.requester}, the approver or the subject")
     if not any(e.payload["kind"] == "reply" for e in ctx.store.events_of(ctx.run_id, "message_sent")):
         problems.append("no reply was sent")
-    return Probe("message_sent", not problems, "; ".join(problems) or f"reply and one-time link to {ctx.requester}")
+    sent = f"reply and one-time link to {ctx.requester}" if via_link else f"reply to {ctx.requester}"
+    return Probe("message_sent", not problems, "; ".join(problems) or sent)
 
 
 @probe("needs_technician_listed")
@@ -343,6 +346,40 @@ async def old_methods_removed(ctx: DodContext, args: dict[str, Any]) -> Probe:
         remaining += sorted(mine & have)
     return Probe("old_methods_removed", not remaining,
                  f"still registered: {', '.join(remaining)}" if remaining else f"removed {len(want)}")
+
+
+# ------------------------------------------------------------------ file restore probe (Build-W4 Day 18)
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+@probe("version_restored")
+async def version_restored(ctx: DodContext, args: dict[str, Any]) -> Probe:
+    """The file's current content is the chosen version's, byte for byte (SharePoint's restore copies it
+    exactly, Build-Day18 spike). The current version's bytes come from the item: `versions/{current}/content`
+    is a 400."""
+    restores = [s.params for s in ctx.plan.steps if s.action == "file.restoreVersion"]
+    if not restores:
+        return Probe("version_restored", False, "no file.restoreVersion step in this run")
+    done, wrong = [], []
+    for p in restores:
+        item, name = f"/drives/{p.driveId}/items/{p.itemId}", p.fileName or p.itemId
+        want = _sha(await ctx.graph.content(f"{item}/versions/{p.versionId}/content"))
+        have = _sha(await ctx.settled(lambda item=item: ctx.graph.content(f"{item}/content"),
+                                      lambda data, want=want: _sha(data) == want))
+        if have == want:
+            current = (await file_versions(ctx.graph, p.driveId, p.itemId))[0]["id"]
+            done.append(f"{name} is version {p.versionId} again (now {current})")
+        else:
+            wrong.append(f"{name}'s current content isn't version {p.versionId}'s")
+    return Probe("version_restored", not wrong, "; ".join(wrong or done))
+
+
+# What a no-playbook run's DoD checks besides the reply (closeout.no_playbook_dod): a probe for each allowed
+# action that has one. The others rely on their step's verify read alone.
+NO_PLAYBOOK_PROBES = {"file.restoreVersion": "version_restored"}
 
 
 async def check(ctx: DodContext, playbook: Playbook, *, only: Collection[str] | None = None,
