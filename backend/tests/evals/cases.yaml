@@ -15,6 +15,7 @@
 #   expect       see eval_harness.check: intents, lint, gate, gate_direct, after_start, state,
 #                escalation, dod, writes, approvals, reads_ok, tool_results, followups, plan
 #   xfail        why the case can't pass yet (strict: remove it when it does)
+#   live         also run it live (eval_harness.test_live, `-m live`), held to the deterministic expectations
 #
 # ${name} is a seeded ID (eval_harness.SEED_USERS / SEED_GROUPS keys, sku, dennis_phone...) or ${domain}.
 # Gate expectations are `decision` or `decision/rule_id`. Every case also checks zero gate bypasses and
@@ -166,6 +167,7 @@ cases:
 
   - id: 1
     name: clean onboarding with peer
+    live: true
     from: tgarcia
     ticket: "hey team, we have a new hire Priya Nair starting monday in accounting. same setup as Marcus pls, she'll need office + teams. thx"
     triage: {intents: [user.onboard], entities: {new_user: {display_name: Priya Nair, department: Accounting, start_date: "2026-10-12"}, peer_user_hint: Marcus}}
@@ -418,6 +420,7 @@ cases:
 
   - id: 7
     name: clean offboarding by an approver
+    live: true
     from: tgarcia
     ticket: "Kevin Brooks's last day is today. Please shut off his access, set an out of office pointing people to me, forward his email to me and make me owner of his groups. His laptop is coming back to the office."
     setup: {last_sign_in: {kevin: "2026-10-09T15:30:00Z"}}
@@ -546,6 +549,7 @@ cases:
 
   - id: 11
     name: MFA reset, clean history
+    live: true
     from: dennis
     ticket: "Hi, I got a new phone over the weekend and the Authenticator app didn't move over, now I can't sign in. Can you reset my MFA? Thanks, Dennis"
     triage: {intents: [mfa.reset], entities: {subject_user_hint: Dennis}}
@@ -608,6 +612,7 @@ cases:
 
   - id: 20
     name: MFA reset for the reports@ service account
+    live: true
     from: tgarcia
     ticket: "The reports@ account keeps getting MFA prompts and the parking app's nightly export broke. Can you reset MFA on reports@?"
     triage: {intents: [mfa.reset], entities: {subject_user_hint: reports@}}

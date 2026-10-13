@@ -20,7 +20,9 @@ fails, so the mark gets removed when the feature arrives).
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
 import time
 import uuid
 from pathlib import Path
@@ -243,7 +245,7 @@ def check(case: dict[str, Any], expect: dict[str, Any], store: Store, run_id: in
 
     if (want := expect.get("intents")) is not None:
         got = of["triage"][-1]["triage"]["intents"]
-        if got != want:
+        if sorted(got) != sorted(want):
             fail("intents", want, got)
 
     if (want := expect.get("lint")) is not None:
@@ -261,6 +263,13 @@ def check(case: dict[str, Any], expect: dict[str, Any], store: Store, run_id: in
         for sid, w in want.items():
             if sid in got and decision_text(got[sid], w) != w:
                 fail(f"gate {sid}", w, decision_text(got[sid], w))
+
+    if (want := expect.get("gate_actions")) is not None:  # live: plans vary, so the gate is judged per action
+        for d in of.get("gate_decision", []):
+            if d["action"] in want and not any(decision_text(d, w) == w for w in want[d["action"]]):
+                fail(f"gate {d['step_id']} ({d['action']})", want[d["action"]], f"{d['decision']}/{d['rule_id']}")
+        if not of.get("gate_decision") and expect.get("state") == "DONE":
+            fail("gate", "decisions for a plan", "none")
 
     if (want := expect.get("gate_direct")) is not None:  # the gate on the plan as recorded, lint or not
         triage = of["triage"][-1]["triage"]
@@ -380,22 +389,39 @@ async def run_case(case: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
                 rt, run_id, case["ticket"], sender,
                 intake_model=TestModel(custom_output_args=triage_data(case, ids)),
                 investigator_model=investigator_model(case, plan))
-            for action in case.get("then", []):
-                if "oob" in action:
-                    runner.confirm_oob(rt, run_id, by=action["oob"])
-                if "approve" in action:
-                    await runner.approve(rt, run_id, by=action["approve"], answers=action.get("answers"))
-                if "reject" in action:
-                    await runner.approve(rt, run_id, by=action["reject"], reject=True)
+            refused = await act(rt, run_id, case)
         finally:
             await graph.aclose()
 
-    problems = check(case, case.get("expect", {}), store, run_id, tenant, after_start, plan, ids)
-    summary = {"states": [e.payload["to"] for e in store.events_of(run_id, "state")],
-               "last": store.last_event(run_id, "state").payload,
-               "gate": [(e.payload["step_id"], e.payload["decision"], e.payload["rule_id"])
-                        for e in store.events_of(run_id, "gate_decision")]}
-    return problems, summary
+    problems = refused + check(case, case.get("expect", {}), store, run_id, tenant, after_start, plan, ids)
+    return problems, summarize(store, run_id)
+
+
+async def act(rt: runner.Runtime, run_id: int, case: dict[str, Any]) -> list[str]:
+    """What people do after the gate (`then`). A refused action (e.g. approving an escalated run) is a problem."""
+    try:
+        for action in case.get("then", []):
+            if "oob" in action:
+                runner.confirm_oob(rt, run_id, by=action["oob"])
+            if "approve" in action:
+                await runner.approve(rt, run_id, by=action["approve"], answers=action.get("answers"))
+            if "reject" in action:
+                await runner.approve(rt, run_id, by=action["reject"], reject=True)
+    except runner.RunError as exc:
+        return [f"{action} was refused: {exc}"]
+    return []
+
+
+def summarize(store: Store, run_id: int) -> dict[str, Any]:
+    """The run in a few lines, for a failure message (no TAP or link token is ever in an event)."""
+    return {"states": [e.payload["to"] for e in store.events_of(run_id, "state")],
+            "last": store.last_event(run_id, "state").payload,
+            "gate": [(e.payload["step_id"], e.payload["action"], e.payload["decision"], e.payload["rule_id"])
+                     for e in store.events_of(run_id, "gate_decision")],
+            "failed": [e.payload for e in store.events_of(run_id, "step_failed")]
+            + [e.payload for e in store.events_of(run_id, "done_check") if not e.payload["ok"]]
+            + [e.payload for e in store.events_of(run_id, "error")],
+            "usage": [e.payload["usage"] for e in store.events_of(run_id, "plan")]}
 
 
 def case_params() -> list:
@@ -412,6 +438,65 @@ async def test_offline(case):
     assert not problems, "\n".join([f"case {case['id']} ({case['name']}):", *problems, f"run: {summary}"])
 
 
+# ------------------------------------------------------------------ the live tier
+#
+# `uv run pytest -m live -k live`: the cases marked `live: true` against the demo tenant, with real models,
+# `tenant/reset.py` before each. Costs about 0.2-0.4 USD a case and writes to the tenant; reset afterwards.
+# Live plans vary, so a live case is held only to the deterministic parts of its offline expectations
+# (live_expect): intent, lint, the gate decision per action, states, escalation kind and the DoD.
+
+REPO = Path(__file__).resolve().parents[2]
+
+
+def live_expect(case: dict[str, Any]) -> dict[str, Any]:
+    expect = case["expect"]
+    actions = {s["id"]: s["action"] for s in case["plan"].get("steps", [])}
+    gate_actions: dict[str, list[str]] = {}
+    for sid, want in expect.get("gate", {}).items():
+        gate_actions.setdefault(actions[sid], []).append(want)
+    live = {k: expect[k] for k in ("intents", "lint", "after_start", "state", "dod") if k in expect}
+    if "kind" in expect.get("escalation", {}):
+        live["escalation"] = {"kind": expect["escalation"]["kind"]}
+    return live | {"gate_actions": gate_actions}
+
+
+def reset_tenant() -> None:
+    done = subprocess.run(["uv", "run", "tenant/reset.py"], cwd=REPO, capture_output=True, text=True, timeout=900)
+    assert done.returncode == 0, f"tenant/reset.py failed:\n{done.stdout[-3000:]}\n{done.stderr[-3000:]}"
+
+
+@pytest.mark.live
+@pytest.mark.parametrize("case", [pytest.param(c, id=f"{c['id']}-{c['name']}") for c in load_cases() if c.get("live")])
+async def test_live(case):
+    from tech.core.config import Settings, ensure_link_key
+    from tech.execution import links
+    from tech.graph.client import graph_from_settings
+
+    settings = Settings.load()
+    if settings.anthropic_api_key:
+        os.environ.setdefault("ANTHROPIC_API_KEY", settings.anthropic_api_key)
+    reset_tenant()
+    store = Store("sqlite://")
+    rt = runner.Runtime(store=store, graph=graph_from_settings(settings), facts=load_client_facts(settings.domain),
+                        domain=settings.domain, link_key=ensure_link_key(settings),
+                        clean_sign_ins_for=settings.mfa_demo_clean_user)
+    try:
+        sender = f"{case['from']}@{settings.domain}".lower()
+        run_id = store.create_run(store.create_ticket(case["ticket"], sender).id).id
+        after_start = await runner.start(rt, run_id, case["ticket"], sender)
+        problems = await act(rt, run_id, case)
+    finally:
+        await rt.graph.aclose()
+
+    problems += check(case, live_expect(case), store, run_id, None, after_start, {}, {})
+    events = json.dumps([e.payload for e in store.events(run_id)])
+    if any(links.decrypt(link, rt.link_key) in events for link in links.for_run(store, run_id)):
+        problems.append("a TAP is in the event log")
+    summary = summarize(store, run_id)
+    print(f"\nlive case {case['id']}: {summary['states'][-1]}; usage {summary['usage']}")
+    assert not problems, "\n".join([f"live case {case['id']} ({case['name']}):", *problems, f"run: {summary}"])
+
+
 # ------------------------------------------------------------------ the harness itself
 
 
@@ -422,6 +507,16 @@ def test_cases_cover_tech_md_section_11():
     for case in load_cases():
         if case["id"] in range(23, 29):
             assert case.get("xfail", "").startswith("Week 4 Day"), f"case {case['id']} lands later in Week 4"
+
+
+def test_live_cases_are_in_scope_and_judged_per_action():
+    live = {str(c["id"]): c for c in load_cases() if c.get("live")}
+    assert set(live) == {"1", "7", "11", "20"}  # the three scenarios and the reports@ refusal; #23 joins Day 18
+    assert not any(c.get("xfail") for c in live.values())
+    onboard = live_expect(live["1"])
+    assert onboard["gate_actions"]["license.purchase"] == ["approve/risk.spend"]
+    assert onboard["gate_actions"]["group.addMember"] == ["auto", "auto"]
+    assert live_expect(live["20"])["escalation"] == {"kind": "investigator"}  # the reason's wording varies live
 
 
 def test_the_bypass_check_catches_each_kind_of_bypass():

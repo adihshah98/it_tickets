@@ -14,7 +14,7 @@ The day has four parts. Each part ends with green tests and a commit, then a sto
 | 1 | Offline tier: FakeTenant reads, harness, all 28 cases | No (tests only) | **Done** |
 | 2 | Fix the three gaps the cases found (D1-D3) | **Yes**: lint, runner, close-out | **Done** (D1-D3 as recommended) |
 | 3 | Seed gap: a disabled former employee for #3 | Seed script only | **Done**, seeded on the tenant |
-| 4 | Live tier, run once, results recorded here | No, but **costs money and writes to the tenant** | Needs approval to run |
+| 4 | Live tier, run once, results recorded here | No, but **costs money and writes to the tenant** | **Built**; the run needs approval |
 
 ---
 
@@ -173,6 +173,21 @@ and DoD do the right thing. The model's judgement is the live tier's job.
   few minutes, mostly resets and replication waits.
 - **Running it writes to the demo tenant.** I'll build it, then ask before the one recorded run. The results
   go into a "Live results" section here.
+
+**Built (part 4):**
+- `eval_harness.test_live`, marked `live`, runs the cases with `live: true` (1, 7, 11, 20). Run it with
+  `uv run pytest -m live -k test_live -s`.
+- `live_expect(case)` derives the live bar from the offline `expect`:
+  - intent, lint, state after start, final state, the escalation kind, and the DoD;
+  - the gate per action, using what the offline plan's step with that action got (for example
+    `license.purchase` → `approve/risk.spend`);
+  - not step ids, plan text, read results or write counts, because those vary live.
+- Live runs use an in-memory store, not `data/tech.db`.
+- A refused approval (say, the live run escalated instead) is reported as a failure, not a crash.
+- Each case prints its final state and the investigator's token usage.
+- The usual invariants still apply: zero bypasses, and the run's real TAP (decrypted from its link) appears
+  in no event.
+- `test_live_cases_are_in_scope_and_judged_per_action` pins the live set and the derivation offline.
 
 ---
 
