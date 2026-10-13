@@ -13,7 +13,7 @@ Each part ends with green tests and a commit, then a stop for review.
 | Part | What | Behaviour change? | Status |
 | ---- | ---- | ----------------- | ------ |
 | 1 | Playbook store + `PlaybookLibrary`, callers switched | None (the proof is 22/22 unchanged) | **Done** |
-| 2 | Open intents: `IntentSlug` + near-duplicate validator | Intake only | |
+| 2 | Open intents: `IntentSlug` + near-duplicate validator | Intake only | **Done** |
 | 3 | No-playbook mode: runner flag, investigator, lint, gate rule 3, `Escalation` | Yes; #25, #26 pass | |
 
 ---
@@ -67,13 +67,38 @@ Offboarding and MFA decisions are pinned per step by the eval cases.
 **Result:** `uv run pytest`: 330 passed, 6 xfailed (#23-28). The eval harness is unchanged: 27 passed
 (cases 1-22, 5b and the variants), 6 xfailed. `ruff` is clean. No live run is needed: no write path changed.
 
-## Part 2: open intents
+## Part 2 (done): open intents
 
-- `base.py`: `IntentSlug` = constrained `str` (`^[a-z]+(\.[a-z_]+)+$` or `unknown`); `Intent` kept as alias.
-- `Triage.intents: list[IntentSlug]`; the intake prompt lists `library.intents()` and asks to reuse one.
-- Output validator rejects a near-duplicate of a known intent (e.g. `file.restore` vs `file.restore_version`)
-  with a retry message naming the known one.
-- **Tests:** a new slug is accepted; a near-duplicate is rejected; `unknown` still works.
+**Files:**
+
+- `core/models/base.py`: `IntentSlug`, a `str` matching `INTENT_RE`. It is two or more dot-separated
+  lowercase words (underscores inside a word are allowed), or `unknown`. `Intent` stays as an alias.
+  `Triage.intents` and `Plan.intent` use it.
+- `agents/intake.py`:
+  - the prompt lists `library.intents()` as the known intents. It asks intake to reuse one for the same
+    job, however it is worded, and to name a new slug only for a job none of them covers;
+  - `near_duplicate(slug, known)`: same first word, and the rest is equal without underscores, one is a
+    prefix of the other, or the similarity is ≥ 0.85 (difflib). onboard/offboard is 0.8, so the two
+    known intents stay apart;
+  - `build_intake(model, known)` registers an output validator that sends near-duplicates back with
+    `ModelRetry`, naming the known intent. Intake has 2 retries.
+
+**Tests:**
+
+- `test_models.py`: valid slugs are accepted (including `unknown`); malformed ones are rejected (no dot,
+  capitals, `..`, hyphens, a trailing `_`, whitespace, empty).
+- `test_agents.py`:
+  - a table of near-duplicates: `file.restore`, `user.onboarding`, `user.off_board` and typos are caught;
+    `user.rename`, `mfa.register` and `group.add_member` are not;
+  - intake answering `user.onboarding` is sent back once and settles on `user.onboard`;
+  - a new slug with no playbook (`file.restore_version`) is kept, with no retry.
+
+**Result:** `uv run pytest`: 355 passed, 6 xfailed. The eval harness is unchanged (27 passed, 6 xfailed).
+`ruff` is clean.
+
+**Not yet checked live:** the new intake prompt hasn't been run against Haiku. Day 21's three Grace
+phrasings are the live check for fragmentation. If intake can't settle after its retries, the run fails
+at intake, the same as any intake model error today.
 
 ## Part 3: no-playbook mode
 

@@ -6,7 +6,7 @@ from datetime import date
 
 from pydantic import BaseModel, Field
 
-from tech.core.models.base import Intent
+from tech.core.models.base import IntentSlug
 
 
 class NewUser(BaseModel):
@@ -29,7 +29,7 @@ class Requester(BaseModel):
 
 
 class Triage(BaseModel):
-    intents: list[Intent]
+    intents: list[IntentSlug]
     entities: TriageEntities
     requester: Requester
     out_of_scope_asks: list[str] = Field(default=[], description="Anything asked for beyond the ticket type, quoted")

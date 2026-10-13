@@ -1,4 +1,4 @@
-"""Shared primitives for the model contracts: IDs, references, the intent and risk-class literals.
+"""Shared primitives for the model contracts: IDs, references, the intent slug and the risk-class literal.
 
 These live in the lowest module of the `core.models` package so triage, params, plan and gate can all
 import them without a cycle. ID fields take either an object ID observed during investigation (a GUID)
@@ -27,7 +27,16 @@ TapRef = Annotated[str, Field(
     description="'$ref:<tap.create step id>.output.tap'. The TAP value itself is never in a plan",
 )]
 
-Intent = Literal["user.onboard", "user.offboard", "mfa.reset", "file.restore_version", "unknown"]
+# Intents are open (Build-W4): any dot-separated lowercase slug, so a ticket type with no playbook yet still
+# gets a name that a learned playbook can later be saved under. Whether it has a playbook is the library's
+# call (PlaybookLibrary.has), and intake rejects near-duplicates of the library's intents.
+WORD = r"[a-z]+(?:_[a-z]+)*"
+INTENT_RE = re.compile(rf"^(?:unknown|{WORD}(?:\.{WORD})+)$")
+IntentSlug = Annotated[str, Field(
+    pattern=INTENT_RE.pattern,
+    description="A job type as dot-separated lowercase words, e.g. 'user.onboard', or 'unknown'",
+)]
+Intent = IntentSlug  # the old name, kept so importers don't change
 RiskClass = Literal[
     "read", "write.reversible", "access.revoke", "data.access", "security.credential",
     "spend", "destructive.soft", "none",

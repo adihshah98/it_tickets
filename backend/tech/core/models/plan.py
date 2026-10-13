@@ -10,7 +10,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
-from tech.core.models.base import Intent, RiskClass
+from tech.core.models.base import IntentSlug, RiskClass
 from tech.core.models.params import (
     AuthMethodDeleteParams,
     FollowupParams,
@@ -138,7 +138,7 @@ class Confirmation(BaseModel):
 
 
 class Plan(BaseModel):
-    intent: Intent
+    intent: IntentSlug
     summary: str
     assumptions: list[str] = []
     steps: list[Step] = Field(description="Empty when escalating")

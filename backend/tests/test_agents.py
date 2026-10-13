@@ -12,7 +12,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.usage import UsageLimits
 
-from tech.agents.intake import check_requester, run_intake
+from tech.agents.intake import check_requester, near_duplicate, run_intake
 from tech.agents.investigator import READ_TOOLS, investigate
 from tech.core.models import Triage
 from tech.core.store import RunState, Store
@@ -239,6 +239,56 @@ async def test_intake_takes_the_requester_from_the_sender_not_the_body(store, ru
     event = next(e.payload for e in store.events(run_id) if e.type == "triage")
     assert event["requester_approved"] is False
     assert store.get_run(run_id).state == RunState.TRIAGED
+
+
+KNOWN = ["mfa.reset", "user.offboard", "user.onboard", "file.restore_version"]
+
+
+@pytest.mark.parametrize(("slug", "duplicates"), [
+    ("file.restore", "file.restore_version"),
+    ("file.restoreversion", "file.restore_version"),
+    ("user.onboarding", "user.onboard"),
+    ("user.onbaord", "user.onboard"),
+    ("user.off_board", "user.offboard"),
+    ("mfa.resets", "mfa.reset"),
+    ("user.onboard", None),  # a known intent is reused, not a duplicate
+    ("unknown", None),
+    ("user.rename", None),  # same first word, a different job
+    ("mfa.register", None),
+    ("group.add_member", None),
+])
+def test_near_duplicates_of_known_intents(slug, duplicates):
+    assert near_duplicate(slug, KNOWN) == duplicates
+
+
+def intake_turns(*intents: list[str]) -> tuple[FunctionModel, list[str]]:
+    """An intake model that answers with these intents in turn; also returns the retry prompts it saw."""
+    answers, retries = list(intents), []
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        retries.extend(p.content for m in messages for p in getattr(m, "parts", [])
+                       if p.part_kind == "retry-prompt" and isinstance(p.content, str))
+        data = triage().model_dump(mode="json") | {"intents": answers.pop(0)}
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, data)])
+
+    return FunctionModel(respond), retries
+
+
+async def test_intake_is_sent_back_to_reuse_a_known_intent(store, run_id, facts):
+    model, retries = intake_turns(["user.onboarding"], ["user.onboard"])
+    result, _ = await run_intake(store, run_id, TICKET, TAYLOR, facts, library=shipped_library(store, facts),
+                                 model=model)
+
+    assert result.intents == ["user.onboard"]
+    assert len(retries) == 1 and "'user.onboarding' is the known intent 'user.onboard'" in retries[0]
+
+
+async def test_intake_keeps_a_new_intent_with_no_playbook(store, run_id, facts):
+    model, retries = intake_turns(["file.restore_version"])
+    result, _ = await run_intake(store, run_id, TICKET, TAYLOR, facts, library=shipped_library(store, facts),
+                                 model=model)
+
+    assert result.intents == ["file.restore_version"] and retries == []
 
 
 def test_requester_check(facts):

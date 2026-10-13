@@ -153,3 +153,17 @@ def test_triage_matches_tech_md_example():
     })
     assert triage.entities.new_user.start_date.isoformat() == "2026-10-12"
     assert Triage.model_validate_json(triage.model_dump_json()) == triage
+
+
+@pytest.mark.parametrize("slug", ["user.onboard", "file.restore_version", "mailbox.auto_reply.set", "unknown"])
+def test_an_intent_is_any_dot_separated_lowercase_slug(slug):
+    data = {"intents": [slug], "entities": {}, "requester": {"name": "Taylor", "email": "t@example.com"}}
+    assert Triage.model_validate(data).intents == [slug]
+
+
+@pytest.mark.parametrize("slug", ["restore", "File.Restore", "file..restore", "file.restore-version", "file.restore_",
+                                  "user.onboard ", "unknown.x.", ""])
+def test_a_malformed_intent_is_rejected(slug):
+    data = {"intents": [slug], "entities": {}, "requester": {"name": "Taylor", "email": "t@example.com"}}
+    with pytest.raises(ValidationError):
+        Triage.model_validate(data)
