@@ -47,12 +47,20 @@ class Transcript:
     calls: list[ToolCall] = field(default_factory=list)
     observed_ids: set[str] = field(default_factory=set)
     objects: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # SharePoint IDs aren't GUIDs, so files are grounded separately: (drive_id, item_id) -> the version ids
+    # files.versions listed for it, newest first (None until its history is read). Case-sensitive.
+    files: dict[tuple[str, str], list[str] | None] = field(default_factory=dict)
 
     def record(self, tool: str, args: dict[str, Any], result: Any = None, error: str | None = None) -> None:
         self.calls.append(ToolCall(tool, args, error))
         if result is not None:
             self.observed_ids |= {m.lower() for m in GUID_RE.findall(json.dumps(result, default=str))}
             self._collect(result)
+        if tool == "files.search" and result:
+            for hit in result:
+                self.files.setdefault((hit["drive_id"], hit["item_id"]), None)
+        elif tool == "files.versions" and result is not None:
+            self.files[(args["drive_id"], args["item_id"])] = [v["id"] for v in result]
 
     def _collect(self, value: Any) -> None:
         if isinstance(value, list):
@@ -227,7 +235,8 @@ async def message_rules(graph: GraphClient, user_id: str) -> list[dict]:
 
 
 async def files_search(graph: GraphClient, query: str) -> list[dict]:
-    """Search the document libraries of every Microsoft 365 group (team sites) for files."""
+    """Search the document libraries of every Microsoft 365 group (team sites) for files. Where a library's
+    search finds nothing, its top-level files whose names hold every word of the query are returned instead."""
     groups = [g async for g in graph.list("/groups", {"$filter": "groupTypes/any(c:c eq 'Unified')",
                                                       "$select": "id,displayName"})]
 
@@ -235,10 +244,15 @@ async def files_search(graph: GraphClient, query: str) -> list[dict]:
         try:
             drive = await graph.get(f"/groups/{group['id']}/drive", params={"$select": "id"})
             page = await graph.get(f"/drives/{drive['id']}/root/search(q='{odata_str(query)}')")
+            items = page.get("value", [])
+            if not items:  # the search index can trail a fresh upload by minutes; the library's top folder can't
+                words = query.casefold().split()
+                items = [it async for it in graph.list(f"/drives/{drive['id']}/root/children")
+                         if "file" in it and all(w in it["name"].casefold() for w in words)]
         except GraphError:  # a group whose site was never provisioned
             return []
         return [{"site": group["displayName"], "drive_id": drive["id"], "item_id": it["id"], "name": it["name"],
-                 "lastModified": it["lastModifiedDateTime"]} for it in page.get("value", [])]
+                 "lastModified": it["lastModifiedDateTime"]} for it in items]
 
     return [hit for hits in await asyncio.gather(*map(search, groups)) for hit in hits]
 

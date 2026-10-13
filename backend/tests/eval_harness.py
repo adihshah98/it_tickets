@@ -85,6 +85,12 @@ SEED_GROUPS: dict[str, tuple[str, str, list[str], list[str], bool]] = {
     "supervisors": ("Parking Supervisors", "security", ["kevin", "jlee"], ["kevin"], False),
     "nw_ops": ("Northwind Operations", "m365", ["tgarcia", "kevin", "sbaker", "grace.kim"], ["tgarcia"], False),
 }
+# key, name, versions oldest first as (time, size): yesterday afternoon's good copies, then today's overwrite
+SEED_FILES: list[tuple[str, str, list[tuple[str, int]]]] = [
+    ("q3_rates", "Q3 Parking Rates.xlsx",
+     [("2026-10-12T14:20:00Z", 12712), ("2026-10-12T16:45:00Z", 12755), ("2026-10-13T09:05:00Z", 12606)]),
+    ("staffing", "Staffing Plan.xlsx", [("2026-10-12T17:30:00Z", 14210), ("2026-10-13T10:00:00Z", 9876)]),
+]
 SKU_PART = "O365_BUSINESS_ESSENTIALS"
 SEATS = 4  # Marcus, Kevin, Taylor and seat-holder: 0 free, so onboarding has to buy one (§10)
 
@@ -109,8 +115,11 @@ def seed(tenant: FakeTenant) -> dict[str, str]:
         tenant.owners[ids[key]] = {ids[o] for o in owners}
     ids["dennis_phone"] = tenant.add_auth_method(ids["dennis"], mid=gid("dennis_phone"))
     ids["luis_phone"] = tenant.add_auth_method(ids["luis.ortega"], name="Pixel 8", mid=gid("luis_phone"))
-    for key in ("nw_ops_drive", "q3_rates", "q3_v1", "q3_v2", "q3_v3", "staffing", "staffing_v1"):
-        ids[key] = gid(key)  # the team site's files; FakeTenant serves them from Week 4 Day 18
+    # The team site's files, with SharePoint-shaped IDs (not GUIDs) so the linter's file grounding is exercised
+    drive = ids["nw_ops_drive"] = tenant.add_drive(ids["nw_ops"], "b!H-i7YY5pVEqXQkPXRsnUJLuxRunmPO1KtzAS0DsA2RAX")
+    for key, name, versions in SEED_FILES:
+        ids[key], version_ids = tenant.add_file(drive, name, versions, item_id=f"01A7DRAB{key.upper():0<26}")
+        ids |= {f"{key.split('_')[0]}_v{n}": v for n, v in enumerate(version_ids, 1)}
     return ids
 
 
@@ -125,6 +134,9 @@ def apply_setup(tenant: FakeTenant, ids: dict[str, str], setup: dict[str, Any]) 
             "ipAddress": row.get("ip"), "clientAppUsed": "Browser",
             "status": {"errorCode": row.get("errorCode", 0), "failureReason": row.get("failureReason")},
             "location": {"city": row.get("city"), "countryOrRegion": row.get("country")}})
+    for key, versions in setup.get("file_versions", {}).items():  # replace a seeded file's history
+        item = tenant.files[ids[key]]
+        tenant.add_file(item["drive"], item["name"], [tuple(v) for v in versions], item_id=item["id"])
     if "playbooks" in setup:
         raise NotImplementedError("learned playbooks need the playbook store (Week 4 Day 17-19)")
 
@@ -504,7 +516,7 @@ async def test_live(case):
 # ------------------------------------------------------------------ the harness itself
 
 
-WEEK_4_LANDED = {25, 26}  # Week 4 cases whose feature is in (Day 17: the no-playbook path)
+WEEK_4_LANDED = {24, 25, 26}  # Week 4 cases whose feature is in (Day 17: the no-playbook path; Day 18: files)
 
 
 def test_cases_cover_tech_md_section_11():

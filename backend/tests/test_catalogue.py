@@ -3,6 +3,7 @@ import pytest
 from tech.core.models import STEP_TYPES, FollowupParams, UserUpdateParams
 from tech.execution.catalogue import ACTIONS, FOLLOWUP_ACTIONS
 from tech.playbooks import intents, load_playbook
+from tech.safety.policy import NO_PLAYBOOK_ALLOWED
 
 USER = "8a590663-09f2-4ee8-ab1a-6195ca3943f9"
 
@@ -20,8 +21,9 @@ def test_every_allowed_action_is_in_the_catalogue(intent):
 
 
 def test_every_catalogue_action_is_used_by_some_playbook():
-    """No dead actions: every catalogue action appears in at least one playbook's allowed_actions."""
-    used = {a for i in intents() for a in load_playbook(i, "example.com").allowed_actions}
+    """No dead actions: every catalogue action appears in at least one playbook's allowed_actions, or on the
+    no-playbook allow-list (file.restoreVersion, until a learned playbook names it)."""
+    used = {a for i in intents() for a in load_playbook(i, "example.com").allowed_actions} | set(NO_PLAYBOOK_ALLOWED)
     assert set(ACTIONS) == used, f"unused: {set(ACTIONS) - used}"
 
 
@@ -37,6 +39,7 @@ def test_every_action_has_a_verify_read_and_compensation():
     ("group.addMember", "write.reversible"),
     ("tap.create", "security.credential"),
     ("authMethod.delete", "security.credential"),
+    ("file.restoreVersion", "write.reversible"),
 ])
 def test_risk_classes_match_tech_md(action, risk):
     assert ACTIONS[action].risk_class == risk

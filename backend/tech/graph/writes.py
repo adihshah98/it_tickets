@@ -489,6 +489,61 @@ class GroupAddOwner(Handler):
         return owner, {"isOwner": owner, "groupId": p["groupId"]}
 
 
+# ------------------------------------------------------------------ files (Build-W4 Day 18)
+
+
+async def file_versions(graph: GraphClient, drive_id: str, item_id: str) -> list[dict]:
+    """A file's versions as Graph lists them, newest (the current one) first."""
+    return [v async for v in graph.list(f"/drives/{drive_id}/items/{item_id}/versions", retry_replication=True)]
+
+
+def find_version(versions: list[dict], version_id: str) -> dict:
+    if (found := next((v for v in versions if v["id"] == version_id), None)) is None:
+        raise Deviation(f"version {version_id} is not in the file's history "
+                        f"({', '.join(v['id'] for v in versions)})")
+    return found
+
+
+class FileRestoreVersion(Handler):
+    """restoreVersion copies the chosen version in as a new current version; nothing is lost, the overwritten
+    one stays in the history. On SharePoint the copy is byte-identical and listed within ~2 s (Build-Day18
+    spike), so verify looks for a new version with the chosen one's size. It can't compare modified times:
+    the new version is stamped with the time of the restore."""
+
+    async def existing(self, ctx, p):
+        if not ctx.resumed:  # a second restore is harmless (one more version), so only a resumed step skips
+            return None
+        started = next(e.payload for e in ctx.store.events_of(ctx.run_id, "step_started")
+                       if e.payload["step_id"] == ctx.step_id)
+        output = {"itemId": p["itemId"], "versionId": p["versionId"],
+                  "previousVersionId": started["snapshot"]["currentVersionId"],
+                  "versionsBefore": started["snapshot"]["versionIds"]}
+        ok, _ = await self.verify(ctx, p, output)
+        return output if ok else None
+
+    async def snapshot(self, ctx, p):
+        versions = await file_versions(ctx.graph, p["driveId"], p["itemId"])
+        find_version(versions, p["versionId"])
+        if versions[0]["id"] == p["versionId"]:
+            raise Deviation(f"version {p['versionId']} is already the current version; there is nothing to restore")
+        return {"currentVersionId": versions[0]["id"], "versionIds": [v["id"] for v in versions]}
+
+    async def act(self, ctx, p):
+        before = await file_versions(ctx.graph, p["driveId"], p["itemId"])
+        await ctx.graph.post(f"/drives/{p['driveId']}/items/{p['itemId']}/versions/{p['versionId']}/restoreVersion",
+                             retry_replication=True)
+        return {"itemId": p["itemId"], "versionId": p["versionId"], "previousVersionId": before[0]["id"],
+                "versionsBefore": [v["id"] for v in before]}
+
+    async def verify(self, ctx, p, output):
+        versions = await file_versions(ctx.graph, p["driveId"], p["itemId"])
+        chosen, current = find_version(versions, p["versionId"]), versions[0]
+        new = current["id"] not in output["versionsBefore"]
+        matches = current.get("size") == chosen.get("size")
+        return new and matches, {"currentMatches": p["versionId"] if matches else None,
+                                 "currentVersionId": current["id"], "size": current.get("size")}
+
+
 HANDLERS: dict[str, Handler] = {
     "user.create": UserCreate(),
     "user.update": UserUpdate(),
@@ -501,4 +556,5 @@ HANDLERS: dict[str, Handler] = {
     "group.removeMember": GroupRemoveMember(),
     "group.addOwner": GroupAddOwner(),
     "authMethod.delete": AuthMethodDelete(),
+    "file.restoreVersion": FileRestoreVersion(),
 }

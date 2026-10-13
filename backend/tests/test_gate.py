@@ -241,6 +241,14 @@ def test_a3_cannot_make_a_no_playbook_write_automatic(transcript, facts):
         "rename": ("approve", "no_playbook.approve")}
 
 
+def test_a_file_restore_without_a_playbook_needs_approval_even_at_a3(transcript, facts):
+    restore = step("restore", "file.restoreVersion",
+                   {"driveId": "b!drive", "itemId": "01ITEM", "versionId": "2.0"}, "write.reversible")
+    for level in (facts, at_level(facts, "A3", "file.restore_version")):
+        result = evaluate(no_playbook(restore), transcript, {}, level, intents=("file.restore_version",))
+        assert decisions(result) == {"restore": ("approve", "no_playbook.approve")}
+
+
 def test_without_a_playbook_the_group_rules_still_block(transcript, facts):
     admins = step("admins", "group.addMember", {"groupId": IT_ADMINS, "userId": MARCUS}, "write.reversible")
     assert decisions(evaluate(no_playbook(admins), transcript, {}, facts, intents=("unknown",)))["admins"][0] == "block"

@@ -5,7 +5,8 @@ Each problem is one sentence the model can act on; a non-empty list goes back to
   1. Schema:    the action is in the catalogue and its params validate; step ids are unique.
   2. Grounded:  every object ID in the params was observed during investigation, and every
                 `$ref:` points to an earlier step it depends on (directly or through another step)
-                and that produces that output.
+                and that produces that output. A file restore's drive and item came from files.search,
+                and its version from that file's files.versions, and isn't the current one.
   3. In scope:  the action is allowed by a triaged intent's playbook, and a group add targets
                 a group the agent may change (see policy.group_problem).
   4. Covers DoD:         every required definition_of_done item has a step that could satisfy it,
@@ -136,6 +137,8 @@ def lint(plan: Plan, transcript: Transcript, playbooks: dict[str, Playbook], fac
             elif earlier[target] not in PRODUCES.get(output, set()):
                 makers = " or ".join(sorted(PRODUCES.get(output, set()))) or "no action"
                 problems.append(f"Step {sid}: {text} must point to a {makers} step, not {earlier[target]}.")
+        if action == "file.restoreVersion":
+            problems += [f"Step {sid}: {p}" for p in _file_problems(params, transcript)]
 
         # 3. in scope
         if no_playbook and action not in allowed:
@@ -180,6 +183,21 @@ def _risk(spec: ActionSpec, params: dict[str, Any]) -> str | None:
         return spec.risk(spec.params.model_validate(params))
     except ValidationError:
         return None
+
+
+def _file_problems(params: dict[str, Any], transcript: Transcript) -> list[str]:
+    """Rule 2 for a file restore: the IDs aren't GUIDs, so they're checked against the file reads."""
+    file, version = (params.get("driveId"), params.get("itemId")), params.get("versionId")
+    if file not in transcript.files:
+        return ["that driveId and itemId weren't in any files.search result; find the file with files.search."]
+    if (versions := transcript.files[file]) is None:
+        return ["read the file's version history with files.versions before choosing a version."]
+    if version not in versions:
+        return [f"version {version} isn't in this file's version history ({', '.join(versions)})."]
+    if version == versions[0]:
+        return [f"version {version} is the current version, so restoring it changes nothing; choose an earlier "
+                "one, or ask the requester which one they mean."]
+    return []
 
 
 def _ordering_problems(plan: Plan) -> list[str]:

@@ -6,6 +6,7 @@ import pytest
 from conftest import ACCOUNTING, DOMAIN, FINANCE_FILES, LINK_KEY, SPB, plan_with, step
 from fake_tenant import TAP_VALUE
 
+from tech.core.models import Plan
 from tech.core.store import Store
 from tech.execution import links, scheduler
 from tech.execution.executor import Execution, compare, order
@@ -202,3 +203,68 @@ def test_compare_leaves_a_timestamp_the_plan_couldnt_know_unchecked():
     assert compare({"signInSessionsValidFromDateTime": "2026-10-13T16:59:11Z"}, observed) == ([], [])
     assert compare({"signInSessionsValidFromDateTime": "2026-10-01T00:00:00Z"}, observed)[0]  # a real date is checked
     assert compare({"displayName": "after approval time"}, {"displayName": "Priya Nair"})[0]  # prose elsewhere fails
+
+
+# ------------------------------------------------------------------ file restore (Build-W4 Day 18)
+
+RATES = [("2026-10-12T14:20:00Z", 12712), ("2026-10-12T16:45:00Z", 12755), ("2026-10-13T09:05:00Z", 12606)]
+
+
+def restore_plan(drive: str, item: str, version: str = "2.0") -> Plan:
+    return Plan.model_validate({"intent": "file.restore_version", "summary": "restore", "steps": [
+        step("restore", "file.restoreVersion", {"driveId": drive, "itemId": item, "versionId": version},
+             "write.reversible") | {"expected": {"currentMatches": version}}]})
+
+
+@pytest.fixture
+def rates(tenant) -> tuple[str, str]:
+    drive = tenant.add_drive(ACCOUNTING)
+    item, _ = tenant.add_file(drive, "Q3 Parking Rates.xlsx", RATES)
+    return drive, item
+
+
+async def test_a_restore_adds_the_chosen_version_as_the_new_current_one(execution, store, run_id, tenant, rates):
+    result = await execution.run(restore_plan(*rates))
+
+    assert result.ok, result.error
+    versions = tenant.files[rates[1]]["versions"]
+    assert [v["id"] for v in versions] == ["4.0", "3.0", "2.0", "1.0"]  # nothing replaced, one appended
+    assert versions[0]["size"] == 12755
+    [started] = [e.payload for e in store.events_of(run_id, "step_started")]
+    assert started["snapshot"] == {"currentVersionId": "3.0", "versionIds": ["3.0", "2.0", "1.0"]}
+    [verified] = [e.payload for e in store.events_of(run_id, "step_verified")]
+    assert verified["observed"] == {"currentMatches": "2.0", "currentVersionId": "4.0", "size": 12755}
+    assert verified["output"]["previousVersionId"] == "3.0"  # what compensation restores
+
+
+async def test_a_restore_that_leaves_no_new_version_fails_verify(execution, store, run_id, tenant, rates):
+    tenant.fail("POST", f"/drives/{rates[0]}/items/{rates[1]}/versions/2.0/restoreVersion", 204)  # accepted, no-op
+
+    result = await execution.run(restore_plan(*rates))
+
+    assert not result.ok and "verify failed" in result.error
+    assert [v["id"] for v in tenant.files[rates[1]]["versions"]] == ["3.0", "2.0", "1.0"]
+
+
+async def test_restoring_the_current_version_is_a_deviation(execution, store, run_id, tenant, rates):
+    result = await execution.run(restore_plan(*rates, version="3.0"))
+    assert not result.ok and "already the current version" in result.error
+    assert not types(store, run_id, "step_started")
+
+
+async def test_a_resumed_restore_that_already_happened_is_not_repeated(execution, store, run_id, tenant, rates):
+    store.append_event(run_id, "step_started", {"step_id": "restore", "action": "file.restoreVersion", "params": {},
+                                                "snapshot": {"currentVersionId": "3.0",
+                                                             "versionIds": ["3.0", "2.0", "1.0"]}})
+    await tenant_restore(execution, rates)  # the earlier process restored, then stopped before verifying
+
+    result = await execution.run(restore_plan(*rates))
+
+    assert result.ok
+    assert [v["id"] for v in tenant.files[rates[1]]["versions"]] == ["4.0", "3.0", "2.0", "1.0"]
+    [verified] = [e.payload for e in store.events_of(run_id, "step_verified")]
+    assert verified["skipped"] == "already true"
+
+
+async def tenant_restore(execution, rates) -> None:
+    await execution.graph.post(f"/drives/{rates[0]}/items/{rates[1]}/versions/2.0/restoreVersion")

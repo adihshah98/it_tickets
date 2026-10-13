@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from tech.core.models.base import IntentSlug, RiskClass
 from tech.core.models.params import (
     AuthMethodDeleteParams,
+    FileRestoreVersionParams,
     FollowupParams,
     GroupAddMemberParams,
     GroupAddOwnerParams,
@@ -109,17 +110,24 @@ class AuthMethodDeleteStep(StepBase):
     params: AuthMethodDeleteParams
 
 
+class FileRestoreVersionStep(StepBase):
+    action: Literal["file.restoreVersion"]
+    params: FileRestoreVersionParams
+
+
 Step = Annotated[
     UserCreateStep | UserUpdateStep | LicensePurchaseStep | LicenseAssignStep | GroupAddMemberStep
     | TapCreateStep | FollowupStep | LinkSendStep | SessionsRevokeStep | MailboxAutoReplyStep
-    | MailboxForwardRuleStep | GroupRemoveMemberStep | GroupAddOwnerStep | AuthMethodDeleteStep,
+    | MailboxForwardRuleStep | GroupRemoveMemberStep | GroupAddOwnerStep | AuthMethodDeleteStep
+    | FileRestoreVersionStep,
     Field(discriminator="action"),
 ]
 STEP_TYPES: dict[str, type[StepBase]] = {
     t.model_fields["action"].annotation.__args__[0]: t  # type: ignore[union-attr]
     for t in (UserCreateStep, UserUpdateStep, LicensePurchaseStep, LicenseAssignStep, GroupAddMemberStep,
               TapCreateStep, FollowupStep, LinkSendStep, SessionsRevokeStep, MailboxAutoReplyStep,
-              MailboxForwardRuleStep, GroupRemoveMemberStep, GroupAddOwnerStep, AuthMethodDeleteStep)
+              MailboxForwardRuleStep, GroupRemoveMemberStep, GroupAddOwnerStep, AuthMethodDeleteStep,
+              FileRestoreVersionStep)
 }
 
 

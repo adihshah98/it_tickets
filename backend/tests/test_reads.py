@@ -157,6 +157,28 @@ async def test_files_search_skips_groups_without_a_site(graph, transcript):
 
 
 @respx.mock
+async def test_files_search_falls_back_to_the_top_folder_while_the_index_lags(graph, transcript):
+    respx.get(f"{GRAPH}/groups").mock(return_value=page({"id": "g1", "displayName": "Ops"}))
+    respx.get(f"{GRAPH}/groups/g1/drive").mock(return_value=httpx.Response(200, json={"id": "d1"}))
+    respx.get(url__startswith=f"{GRAPH}/drives/d1/root/search").mock(return_value=page())
+    respx.get(f"{GRAPH}/drives/d1/root/children").mock(return_value=page(
+        {"id": "i1", "name": "Q3 Parking Rates.xlsx", "lastModifiedDateTime": "t", "file": {}},
+        {"id": "i2", "name": "Q3 Parking Rates", "lastModifiedDateTime": "t", "folder": {}},  # a folder
+        {"id": "i3", "name": "Q2 Parking Rates.xlsx", "lastModifiedDateTime": "t", "file": {}}))
+    hits = await run_read(graph, transcript, "files.search", query="q3 parking rates")
+    assert [h["item_id"] for h in hits] == ["i1"]
+
+
+async def test_the_transcript_grounds_files_by_search_and_versions(transcript):
+    transcript.record("files.search", {"query": "rates"}, [{"drive_id": "b!d", "item_id": "01A", "name": "x"}])
+    assert transcript.files == {("b!d", "01A"): None}  # found; its history not read yet
+    transcript.record("files.versions", {"drive_id": "b!d", "item_id": "01A"}, [{"id": "2.0"}, {"id": "1.0"}])
+    assert transcript.files == {("b!d", "01A"): ["2.0", "1.0"]}
+    transcript.record("files.search", {"query": "rates"}, [{"drive_id": "b!d", "item_id": "01A", "name": "x"}])
+    assert transcript.files == {("b!d", "01A"): ["2.0", "1.0"]}  # a second search doesn't forget the history
+
+
+@respx.mock
 async def test_risky_user_flagged(graph, transcript):
     respx.get(f"{GRAPH}/identityProtection/riskyUsers/{MARCUS}").mock(return_value=httpx.Response(200, json={
         "id": MARCUS, "riskLevel": "high", "riskState": "atRisk", "riskDetail": "none",
@@ -198,3 +220,11 @@ async def test_graph_errors_are_recorded_then_raised(graph, transcript):
     [call] = transcript.calls
     assert call.tool == "signIns.list" and call.error.startswith("403")
     assert not transcript.called("signIns.list")
+
+
+async def test_files_search_finds_a_fresh_upload_before_the_index_does(tenant, graph, transcript):
+    site = tenant.add_group("0c0c0c0c-0000-4000-8000-000000000001", "Northwind Operations", "m365")
+    tenant.add_file(tenant.add_drive(site), "Q3 Parking Rates.xlsx", [("2026-10-13T09:05:00Z", 12606)])
+    tenant.search_lag = 1
+    [hit] = await run_read(graph, transcript, "files.search", query="Q3 Parking Rates")
+    assert hit["name"] == "Q3 Parking Rates.xlsx" and hit["drive_id"].startswith("b!")

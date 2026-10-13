@@ -9,12 +9,17 @@ Holds users, group members, licenses and TAPs, and can fail the next N calls on 
 It also answers the investigator's reads (users.search/list/get, memberOf with group kinds, ownedObjects,
 the license pool), so the eval harness can run a whole ticket against it. Groups and SKUs registered with
 `add_group`/`add_sku` carry the fields those reads return; unregistered ones still work as bare ids.
+
+Team-site files (`add_drive`/`add_file`) have a version history, newest first like Graph's, with
+SharePoint-shaped IDs (`b!…` drives, `01…` items, `2.0` versions). A restore appends a copy of the chosen
+version as the new current one, as SharePoint does. `search_lag` makes the next N searches find nothing.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import secrets
 import uuid
 from datetime import UTC, datetime
 from urllib.parse import unquote_plus
@@ -49,6 +54,9 @@ class FakeTenant:
         self.stale_member_reads = 0  # memberOf reads that don't show new memberships yet (directory lag)
         self.stale_method_reads = 0  # auth-method reads that still show deleted methods (seen live, Day 16)
         self.deleted_methods: dict[str, list[dict]] = {}
+        self.drives: dict[str, str] = {}            # groupId (lower) -> driveId, for groups with a team site
+        self.files: dict[str, dict] = {}            # itemId -> {id, name, drive, versions (newest first)}
+        self.search_lag = 0  # searches that find nothing yet (the index trails a fresh upload)
         self.seat_holder = self.add_user("seat-holder", "Seat Holder")
 
     # ------------------------------------------------------------ setup helpers
@@ -82,6 +90,55 @@ class FakeTenant:
     def add_sku(self, sku_id: str, part_number: str, enabled: int) -> str:
         self.skus[sku_id.lower()] = {"skuId": sku_id, "skuPartNumber": part_number, "enabled": enabled}
         return sku_id
+
+    def add_drive(self, group_id: str, drive_id: str | None = None) -> str:
+        """Give a group a team site with a document library."""
+        drive_id = drive_id or "b!" + secrets.token_urlsafe(48)
+        self.drives[group_id.lower()] = drive_id
+        return drive_id
+
+    def add_file(self, drive_id: str, name: str, versions: list[tuple[str, int]], item_id: str | None = None,
+                 ) -> tuple[str, list[str]]:
+        """Upload a file with a version per (time, size), oldest first. Returns its id and version ids, oldest
+        first ("1.0", "2.0"...)."""
+        item_id = item_id or "01" + secrets.token_hex(16).upper()
+        rows = [{"id": f"{n}.0", "lastModifiedDateTime": when, "size": size,
+                 "lastModifiedBy": {"user": {"displayName": "SharePoint App"}}}
+                for n, (when, size) in enumerate(versions, 1)]
+        self.files[item_id] = {"id": item_id, "name": name, "drive": drive_id, "versions": rows[::-1]}
+        return item_id, [r["id"] for r in rows]
+
+    def _item(self, item: dict) -> dict:
+        current = item["versions"][0]
+        return {"id": item["id"], "name": item["name"], "size": current["size"], "file": {},
+                "lastModifiedDateTime": current["lastModifiedDateTime"]}
+
+    def _drive_route(self, method: str, drive_id: str, rest: str) -> httpx.Response:
+        items = [f for f in self.files.values() if f["drive"] == drive_id]
+        if m := re.fullmatch(r"/root/search\(q='(.*)'\)", rest):
+            if self.search_lag:
+                self.search_lag -= 1
+                return httpx.Response(200, json={"value": []})
+            words = m.group(1).replace("''", "'").casefold().split()
+            return httpx.Response(200, json={"value": [self._item(f) for f in items
+                                                       if all(w in f["name"].casefold() for w in words)]})
+        if rest == "/root/children":
+            return httpx.Response(200, json={"value": [self._item(f) for f in items]})
+        m = re.fullmatch(r"/items/([^/]+)/versions(?:/([^/]+)/restoreVersion)?", rest)
+        if not m or (item := self.files.get(m.group(1))) is None or item["drive"] != drive_id:
+            return error(404, "The resource could not be found.", "itemNotFound")
+        if method == "GET" and not m.group(2):
+            return httpx.Response(200, json={"value": item["versions"]})
+        if method == "POST" and m.group(2):
+            chosen = next((v for v in item["versions"] if v["id"] == m.group(2)), None)
+            if chosen is None:
+                return error(404, "The resource could not be found.", "itemNotFound")
+            major = max(int(v["id"].split(".")[0]) for v in item["versions"]) + 1
+            item["versions"].insert(0, chosen | {"id": f"{major}.0", "lastModifiedDateTime": datetime.now(UTC)
+                                                 .strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                                 "lastModifiedBy": {"application": {"displayName": "Microsoft Graph"}}})
+            return httpx.Response(204)
+        return error(405, f"no route {method} {rest}", "MethodNotAllowed")
 
     def _group(self, gid: str) -> dict:
         return self.groups.get(gid.lower(), {"@odata.type": "#microsoft.graph.group", "id": gid})
@@ -140,6 +197,15 @@ class FakeTenant:
             m = re.search(r"userId eq '([^']+)'", query)
             rows = [r for r in self.sign_ins if not m or r.get("userId", m.group(1)).lower() == m.group(1).lower()]
             return httpx.Response(200, json={"value": rows})
+        if method == "GET" and path == "/groups" and "Unified" in query:
+            return httpx.Response(200, json={"value": [g for g in self.groups.values()
+                                                       if "Unified" in g["groupTypes"]]})
+        if m := re.fullmatch(r"/groups/([^/]+)/drive", path):
+            if (drive := self.drives.get(m.group(1).lower())) is None:
+                return error(404, "Resource not found for the segment 'drive'.", "itemNotFound")
+            return httpx.Response(200, json={"id": drive})
+        if m := re.fullmatch(r"/drives/([^/]+)(/.*)", path):
+            return self._drive_route(method, m.group(1), m.group(2))
         if m := re.fullmatch(r"/identityProtection/riskyUsers/([^/]+)", path):
             if (risky := self.risky.get(m.group(1).lower())) is None:
                 return error(404, "riskyUser not found", "ResourceNotFound")

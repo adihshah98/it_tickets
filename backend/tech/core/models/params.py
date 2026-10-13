@@ -13,7 +13,16 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from tech.core.models.base import ObjectId, ObjectIdOrRef, Params, TapRef, alias
+from tech.core.models.base import (
+    DriveId,
+    DriveItemId,
+    ObjectId,
+    ObjectIdOrRef,
+    Params,
+    TapRef,
+    VersionId,
+    alias,
+)
 
 
 class UserCreateParams(Params):
@@ -148,6 +157,17 @@ class AuthMethodDeleteParams(Params):
                                        description="Which kind of method to delete; the handler maps it to "
                                                    "the Graph endpoint")
     methodId: ObjectId = alias("methodId", "method_id", description="The method's id, observed from authMethods.list")
+
+
+# ------------------------------------------------------------------ files (Build-W4 Day 18)
+
+
+class FileRestoreVersionParams(Params):
+    driveId: DriveId = alias("driveId", "drive_id")
+    itemId: DriveItemId = alias("itemId", "item_id")
+    versionId: VersionId = alias("versionId", "version_id")
+    fileName: str | None = alias("fileName", "file_name", "name", default=None,
+                                 description="The file's name, for the approval card only")
 
 
 LinkContent =Literal["email_access_steps", "outlook_mobile_app_tip", "file_share_note"]

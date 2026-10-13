@@ -5,6 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from tech.core.models import (
+    FileRestoreVersionParams,
     FollowupParams,
     LinkSendParams,
     Plan,
@@ -167,3 +168,13 @@ def test_a_malformed_intent_is_rejected(slug):
     data = {"intents": [slug], "entities": {}, "requester": {"name": "Taylor", "email": "t@example.com"}}
     with pytest.raises(ValidationError):
         Triage.model_validate(data)
+
+
+def test_file_restore_params_take_sharepoint_ids_not_guids():
+    p = FileRestoreVersionParams.model_validate({"drive_id": "b!H-i7YY5pVEqXQkPXRsnUJ_x", "item_id": "01A7DRABNZ5S",
+                                                  "version_id": "2.0"})
+    assert p.model_dump(by_alias=True, exclude_none=True) == {
+        "driveId": "b!H-i7YY5pVEqXQkPXRsnUJ_x", "itemId": "01A7DRABNZ5S", "versionId": "2.0"}
+    for bad in ({"versionId": "v2"}, {"versionId": "latest"}, {"itemId": "../../users"}):
+        with pytest.raises(ValidationError):
+            FileRestoreVersionParams.model_validate({"driveId": "b!d", "itemId": "01A", "versionId": "1.0"} | bad)

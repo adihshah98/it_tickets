@@ -13,6 +13,8 @@ from tech.core.models.base import (
     GUID_RE,
     INTENT_RE,
     REF_RE,
+    DriveId,
+    DriveItemId,
     Intent,
     IntentSlug,
     ObjectId,
@@ -20,6 +22,7 @@ from tech.core.models.base import (
     Params,
     RiskClass,
     TapRef,
+    VersionId,
     alias,
     parse_ref,
 )
@@ -27,6 +30,7 @@ from tech.core.models.gate import GateDecision
 from tech.core.models.params import (
     AuthMethodDeleteParams,
     AuthMethodType,
+    FileRestoreVersionParams,
     FollowupParams,
     GroupAddMemberParams,
     GroupAddOwnerParams,
@@ -46,6 +50,7 @@ from tech.core.models.plan import (
     STEP_TYPES,
     AuthMethodDeleteStep,
     Confirmation,
+    FileRestoreVersionStep,
     FollowupStep,
     GroupAddMemberStep,
     GroupAddOwnerStep,
@@ -69,7 +74,7 @@ from tech.core.models.triage import NewUser, Requester, Triage, TriageEntities
 __all__ = [
     # base
     "GUID", "GUID_RE", "INTENT_RE", "REF_RE", "Intent", "IntentSlug", "RiskClass", "ObjectId", "ObjectIdOrRef",
-    "TapRef", "Params", "alias", "parse_ref",
+    "TapRef", "DriveId", "DriveItemId", "VersionId", "Params", "alias", "parse_ref",
     # triage
     "NewUser", "TriageEntities", "Requester", "Triage",
     # params
@@ -77,12 +82,13 @@ __all__ = [
     "GroupAddMemberParams", "TapCreateParams", "FollowupParams", "LinkSendParams", "LinkContent",
     "SessionsRevokeParams", "MailboxAutoReplyParams", "MailboxForwardRuleParams",
     "GroupRemoveMemberParams", "GroupAddOwnerParams", "AuthMethodDeleteParams", "AuthMethodType",
+    "FileRestoreVersionParams",
     # plan
     "StepBase", "UserCreateStep", "UserUpdateStep", "LicensePurchaseStep", "LicenseAssignStep",
     "GroupAddMemberStep", "TapCreateStep", "FollowupStep", "LinkSendStep", "Step", "STEP_TYPES",
     "TechnicianItem", "Confirmation", "Plan",
     "SessionsRevokeStep", "MailboxAutoReplyStep", "MailboxForwardRuleStep",
-    "GroupRemoveMemberStep", "GroupAddOwnerStep", "AuthMethodDeleteStep",
+    "GroupRemoveMemberStep", "GroupAddOwnerStep", "AuthMethodDeleteStep", "FileRestoreVersionStep",
     # gate
     "GateDecision",
 ]

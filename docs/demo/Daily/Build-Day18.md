@@ -13,8 +13,8 @@ Each part ends with green tests and a commit, then a stop for review.
 | Part | What | Behaviour change? | Status |
 | ---- | ---- | ----------------- | ------ |
 | 0 | Live spike: search lag and what a restore does to the file (read-mostly) | None | **Done** |
-| 1 | `file.restoreVersion` four-touch + FakeTenant drives + file-ID grounding | New action; shipped intents unchanged | Planned |
-| 2 | No-playbook close-out: DoD, reply note, `can_save_playbook`; #23, #24 | Close-out for no-playbook runs only | Planned |
+| 1 | `file.restoreVersion` four-touch + FakeTenant drives + file-ID grounding; #24 | New action; shipped intents unchanged | **Done** |
+| 2 | No-playbook close-out: DoD, reply note, `can_save_playbook`; #23 | Close-out for no-playbook runs only | Planned |
 | 3 | Live: reset, Sophie via the CLI, `test_live_file_restore.py` | None (proof) | Planned |
 
 **Needs your approval:** Part 0's one test restore on the tenant, and all of Part 3 (tenant reset, live model
@@ -149,7 +149,7 @@ This confirms decision 1: none of these are GUIDs.
 - **The tenant is now off its staged state.** Lot Permits Tracker has 4 versions, so `--files overwrite` on
   its own would skip it. Part 3 starts with `--files base`, which deletes and re-uploads the file.
 
-## Part 1: the action, FakeTenant, grounding
+## Part 1 (done): the action, FakeTenant, grounding
 
 **Product code:**
 
@@ -159,8 +159,8 @@ This confirms decision 1: none of these are GUIDs.
 - `core/models/plan.py`: `FileRestoreVersionStep`, added to `Step` and `STEP_TYPES`.
 - `execution/catalogue.py`: an `ActionSpec` for `file.restoreVersion`: `write.reversible`, `POST
   /drives/{d}/items/{i}/versions/{v}/restoreVersion`, verify and compensate as in decisions 2 and 10.
-- `graph/writes.py`: a `FileRestoreVersion` handler (existing/snapshot/act/verify) and the
-  `file_versions_raw` helper the handler and the probe share.
+- `graph/writes.py`: a `FileRestoreVersion` handler (existing/snapshot/act/verify), plus the
+  `file_versions` and `find_version` helpers that the handler and Part 2's probe share.
 - `graph/reads.py`:
   - `Transcript` records file hits and version lists (decision 1);
   - the `files.search` fallback to root children (decision 9).
@@ -196,7 +196,46 @@ This confirms decision 1: none of these are GUIDs.
   skipped.
 - `test_gate.py`: `file.restoreVersion` with no playbook → `approve` (`no_playbook.approve`), including at A3.
 
-## Part 2: no-playbook close-out, #23 and #24
+**As built:**
+
+- **Handler:**
+  - `snapshot` raises a Deviation if the chosen version isn't in the history or is the current one, so
+    nothing is written;
+  - `act` records `previousVersionId` (what compensation restores) and `versionsBefore`;
+  - `verify` reports `{currentMatches, currentVersionId, size}`;
+  - `existing` returns a result only on a resumed step that already restored. It verifies against the
+    `step_started` snapshot.
+- **The `files.search` fallback** lists the library's top folder and keeps files (not folders) whose name
+  contains every word of the query. It runs per library, only when that library's search returns nothing.
+- **Transcript:** `Transcript.files` maps (drive_id, item_id) to the version IDs listed for that file, or
+  `None` if only search has seen it. IDs are case-sensitive: they're base64, unlike GUIDs.
+- **Harness seed:**
+  - Q3 Parking Rates is `1.0`/`2.0` yesterday afternoon and `3.0` at 09:05 today;
+  - Staffing Plan is `1.0` yesterday and `2.0` at 10:00 today (#27);
+  - the `${q3_v1}`… and `${staffing_v1}`… placeholders now resolve to version IDs;
+  - a case can replace a file's history with `setup.file_versions`.
+- **`test_catalogue`'s "no dead actions" check** now counts `NO_PLAYBOOK_ALLOWED`:
+  `file.restoreVersion` isn't in any playbook until one is learned.
+
+**Two differences from the plan:**
+
+- **#24 un-xfailed here, not in Part 2.** It only needed FakeTenant's versions. With
+  `setup.file_versions` (09:05, 11:40, 14:10 today) and `expect: {state: ESCALATED, escalation: {kind:
+  questions}}`, it passes. Offline it checks the shape (a question, zero writes, waiting on the requester),
+  not whether Opus asks. That's Part 3's optional live run.
+- **#23 passed as soon as the action existed (XPASS),** because a no-playbook run has no DoD and went
+  straight to DONE. Its `expect` now has `dod: {ok: true, probes: [version_restored, message_sent]}`, so
+  it stays xfail until Part 2. With `--runxfail` it fails only on "no probes ran". Lint (grounded file
+  IDs), the gate (`no_playbook.approve`) and execution (the restore verified) all pass.
+
+**Result:**
+
+- `uv run pytest`: 386 passed, 3 xfailed (#23, #27, #28).
+- `uv run ruff check backend` is clean.
+- `tenant/seed.py`'s ruff warnings are the 17 it had before (line length); none are new.
+- No live run: Part 3 does that.
+
+## Part 2: no-playbook close-out, #23
 
 **Product code:**
 
@@ -224,13 +263,13 @@ This confirms decision 1: none of these are GUIDs.
 - `test_api.py`: `can_save_playbook` is true for #23's run, and false for a playbook run and for an
   escalated one.
 - `evals/cases.yaml`:
-  - remove the xfail from **#23** and add `dod: [version_restored, message_sent]`;
-  - give **#24** a `setup.file_versions` with three versions today, and remove its xfail. It already
-    expects zero writes and the question. The run ends `ESCALATED` with `kind=questions` (`runner.py:222`);
-    add that to `expect`.
-  - Add `WEEK_4_LANDED` entries.
+  - remove the xfail from **#23** (its `dod` expectation is already in, from Part 1);
+  - add 23 to `WEEK_4_LANDED`.
+- `lint.DOD_PRODUCERS`: `version_restored` ← `file.restoreVersion`. `message_sent` needs a
+  `link.sendOneTime` step only when its args say `via: one_time_link`. This matters for a learned
+  restore playbook (Day 19).
 
-**Gate:** `uv run pytest` green: 369 tests plus today's new ones, with #27 and #28 the only xfails. The
+**Gate:** `uv run pytest` green: 386 tests plus Part 2's new ones, with #27 and #28 the only xfails. The
 three shipped intents' gate decisions are unchanged. `ruff` is clean.
 
 ## Part 3: live (needs approval: tenant writes and model spend)

@@ -216,6 +216,7 @@ def workbook(rows: list[list]) -> bytes:
 
 
 RATES_HEADER = ["Lot", "Hourly", "Daily max", "Monthly permit", "Effective"]
+STAFF_HEADER = ["Lot", "Weekday", "Saturday", "Sunday"]
 FILES = {
     "Q3 Parking Rates.xlsx": [
         workbook([RATES_HEADER, ["Lot A (Main St)", 3.00, 18.00, 140, "2026-07-01"], ["Lot B (Harbor)", 2.50, 15.00, 120, "2026-07-01"], ["Garage C", 4.00, 24.00, 185, "2026-07-01"]]),
@@ -227,6 +228,13 @@ FILES = {
         workbook([["Permit #", "Holder", "Lot", "Expires"], [1001, "Harbor Dental", "Lot B (Harbor)", "2026-12-31"], [1002, "Main St Bakery", "Lot A (Main St)", "2026-11-30"]]),
         workbook([["Permit #", "Holder", "Lot", "Expires"], [1001, "Harbor Dental", "Lot B (Harbor)", "2026-12-31"], [1002, "Main St Bakery", "Lot A (Main St)", "2026-11-30"], [1003, "City Library", "Garage C", "2027-01-31"]]),
         workbook([["Permit #", "Holder"], [1003, "City Library"]]),
+    ],
+    # Grace's file (eval #27, the hands-free A3 restore once the playbook is learned)
+    "Staffing Plan.xlsx": [
+        workbook([STAFF_HEADER, ["Lot A (Main St)", 2, 2, 1], ["Lot B (Harbor)", 1, 2, 1], ["Garage C", 3, 3, 2]]),
+        workbook([STAFF_HEADER, ["Lot A (Main St)", 2, 2, 1], ["Lot B (Harbor)", 1, 2, 1], ["Garage C", 3, 3, 2],
+                  ["Lot D (Stadium)", 0, 4, 4]]),
+        workbook([["Lot", "Notes"], ["Lot D (Stadium)", "event days only?"]]),
     ],
 }
 

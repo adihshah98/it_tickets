@@ -762,17 +762,21 @@ cases:
            params: {driveId: "${nw_ops_drive}", itemId: "${q3_rates}", versionId: "${q3_v2}"},
            expected: {currentMatches: "${q3_v2}"}}
     then: [{approve: tgarcia}]
-    xfail: "Week 4 Day 18: file.restoreVersion, FakeTenant drive versions, no-playbook close-out"
+    xfail: "Week 4 Day 18 part 2: the no-playbook close-out (version_restored, message_sent)"
     expect:
       gate: {restore: approve/no_playbook.approve}
       after_start: AWAITING_APPROVAL
       state: DONE
+      dod: {ok: true, probes: [version_restored, message_sent]}
       reads_ok: [files.search, files.versions]
 
   - id: 24
     name: file restore, several versions the same day, no time given
     from: grace.kim
     ticket: "Can you restore the earlier version of Q3 Parking Rates from today? - Grace"
+    setup:
+      file_versions:
+        q3_rates: [["2026-10-13T09:05:00Z", 12712], ["2026-10-13T11:40:00Z", 12755], ["2026-10-13T14:10:00Z", 12606]]
     triage: {intents: [file.restore_version], entities: {}}
     reads:
       - [files_search, {query: Q3 Parking Rates}]
@@ -782,8 +786,9 @@ cases:
       summary: Ask which of today's versions Grace means
       steps: []
       questions_for_requester: ["Three versions of Q3 Parking Rates.xlsx were saved today (09:05, 11:40, 14:10). Which one should we restore?"]
-    xfail: "Week 4 Day 18: FakeTenant drive versions; the generic guideline's ambiguity rule"
     expect:
+      state: ESCALATED
+      escalation: {kind: questions}
       writes: 0
       reads_ok: [files.search, files.versions]
       plan: {questions: [Which one]}

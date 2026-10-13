@@ -26,6 +26,11 @@ TapRef = Annotated[str, Field(
     pattern=r"^\$ref:[A-Za-z0-9_-]+\.output\.tap$",
     description="'$ref:<tap.create step id>.output.tap'. The TAP value itself is never in a plan",
 )]
+# SharePoint file IDs aren't GUIDs (Build-Day18 spike): a drive is `b!H-i7…`, an item `01A7DRAB…`, a version
+# `2.0`. The linter grounds them against the files.search and files.versions results instead.
+DriveId = Annotated[str, Field(pattern=r"^[A-Za-z0-9!_-]+$", description="A drive_id from files.search")]
+DriveItemId = Annotated[str, Field(pattern=r"^[A-Za-z0-9!_-]+$", description="An item_id from files.search")]
+VersionId = Annotated[str, Field(pattern=r"^\d+\.\d+$", description="A version id from files.versions, e.g. '2.0'")]
 
 # Intents are open (Build-W4): any dot-separated lowercase slug, so a ticket type with no playbook yet still
 # gets a name that a learned playbook can later be saved under. Whether it has a playbook is the library's

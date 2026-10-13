@@ -3,7 +3,8 @@
 The gate takes risk classes from here, never from the plan (the plan's risk_class is only compared, for
 the audit log). Each action's `handler` does the work (graph/writes.py, mocks.py, links.py, scheduler.py);
 `verify` and `compensate` describe it for people, and `compensate` is what an escalation offers to roll back.
-Onboarding, offboarding and MFA reset actions are here.
+Onboarding, offboarding and MFA reset actions are here, and file.restoreVersion, which no shipped playbook
+uses yet: it is on the no-playbook allow-list (policy.NO_PLAYBOOK_ALLOWED).
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from dataclasses import dataclass, field
 
 from tech.core.models import (
     AuthMethodDeleteParams,
+    FileRestoreVersionParams,
     FollowupParams,
     GroupAddMemberParams,
     GroupAddOwnerParams,
@@ -151,5 +153,13 @@ ACTIONS: dict[str, ActionSpec] = {spec.name: spec for spec in [
         "GET /users/{userId}/authentication/methods: the method is gone",
         "nothing to restore: the user registers a new method (with the TAP sent by one-time link)",
         handler=HANDLERS["authMethod.delete"],
+    ),
+    # File restore (Build-W4 Day 18, Product.MD §3.4)
+    ActionSpec(
+        "file.restoreVersion", FileRestoreVersionParams, "write.reversible",
+        "POST /drives/{driveId}/items/{itemId}/versions/{versionId}/restoreVersion",
+        "GET /drives/{driveId}/items/{itemId}/versions: a new current version with the chosen version's size",
+        "restoreVersion to the version that was current before (output.previousVersionId); the overwritten "
+        "version stays in the history either way", handler=HANDLERS["file.restoreVersion"],
     ),
 ]}

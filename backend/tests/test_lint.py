@@ -117,6 +117,43 @@ def test_without_a_playbook_there_is_nothing_that_must_be_investigated(facts):
     assert problems(no_playbook_plan(RENAME), one_read, {}, facts) == []
 
 
+# ------------------------------------------------------------------ file restore grounding (not GUIDs)
+
+DRIVE, ITEM = "b!H-i7YY5pVEqXQkPXRsnUJ", "01A7DRABNZ5SZVNFRH35DZITOYEXVFNOJT"
+OTHER = "01A7DRABO6ZW2J7QCLDBCYCFBZK6ICZCNY"
+
+
+def file_transcript() -> Transcript:
+    t = Transcript()
+    hit = {"site": "Northwind Operations", "drive_id": DRIVE, "name": "Q3 Parking Rates.xlsx", "lastModified": "x"}
+    t.record("files.search", {"query": "Q3"}, [hit | {"item_id": ITEM}, hit | {"item_id": OTHER}])
+    t.record("files.versions", {"drive_id": DRIVE, "item_id": ITEM},
+             [{"id": v, "time": "x", "size": 1, "by": None} for v in ("3.0", "2.0", "1.0")])
+    return t
+
+
+def restore(item: str = ITEM, version: str = "2.0", drive: str = DRIVE) -> Plan:
+    return no_playbook_plan(expecting(step("restore", "file.restoreVersion",
+                                           {"driveId": drive, "itemId": item, "versionId": version},
+                                           "write.reversible"), {"currentMatches": version}))
+
+
+def test_a_restore_of_a_listed_earlier_version_is_grounded(facts):
+    assert problems(restore(), file_transcript(), {}, facts) == []
+
+
+@pytest.mark.parametrize(("plan", "expect"), [
+    (restore(item="01INVENTED"), "weren't in any files.search result"),
+    (restore(drive="b!elsewhere"), "weren't in any files.search result"),
+    (restore(item=OTHER), "read the file's version history with files.versions"),  # found, history not read
+    (restore(version="7.0"), "version 7.0 isn't in this file's version history (3.0, 2.0, 1.0)"),
+    (restore(version="3.0"), "version 3.0 is the current version"),
+])
+def test_a_restore_must_name_a_file_and_version_the_investigation_saw(facts, plan, expect):
+    [found] = problems(plan, file_transcript(), {}, facts)
+    assert found.startswith("Step restore: ") and expect in found
+
+
 def test_an_escalation_passes(transcript, playbooks, facts):
     plan = Plan.model_validate(ONBOARD_PLAN | {"steps": [], "escalate": True, "escalation_reason": "rehire?"})
     assert problems(plan, transcript, {}, facts) == []
