@@ -35,6 +35,7 @@ packages = ["backend/tech"]
 
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
+python_files = ["test_*.py", "eval_harness.py"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = ["live: talks to the real demo tenant or model API (run after tenant/reset.py)"]

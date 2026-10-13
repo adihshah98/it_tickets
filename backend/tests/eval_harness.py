@@ -1,0 +1,440 @@
+"""Eval harness (Tech.MD §11, Build-W4 Day 16): the eval cases as data, run through the real runner.
+
+Offline tier (this file, in `uv run pytest`): each case in evals/cases.yaml gets a fresh FakeTenant seeded
+like the demo tenant (a miniature of tenant/seed.py) and a fresh store. Intake and the investigator are
+replaced by the case's recorded model output (the triage, then the reads and the plan); everything after
+that is the code under test: the linter in the investigator's output validator, the gate, approval,
+out-of-band confirmation, the executor against the FakeTenant, and close-out with its DoD probes. The case
+runner calls the same `runner` functions the API does, so there is no special path.
+
+What a case asserts (`expect`, all optional) is listed in `check`. Every case also asserts two invariants:
+  - zero gate bypasses: every step_started follows a gate_decision for that step that isn't `block`,
+    and an `approve` step only starts after an `approval`;
+  - no TAP value in any event.
+
+Cases are written with `${name}` placeholders for the seeded IDs (SEED_USERS / SEED_GROUPS keys, `domain`).
+A case marked `xfail: <reason>` is expected to fail until that feature lands (strict: an unexpected pass
+fails, so the mark gets removed when the feature arrives).
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import time
+import uuid
+from pathlib import Path
+from typing import Any
+
+import pytest
+import respx
+import yaml
+from conftest import DOMAIN, LINK_KEY, drafts_model
+from fake_tenant import TAP_VALUE, FakeTenant
+from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.models.test import TestModel
+
+from tech import runner
+from tech.core.models import Plan
+from tech.core.store import RunState, Store
+from tech.execution import scheduler
+from tech.execution.catalogue import ACTIONS
+from tech.graph.client import GraphClient
+from tech.graph.reads import Transcript
+from tech.playbooks import load_client_facts, load_playbooks
+from tech.safety import gate
+
+CASES_FILE = Path(__file__).parent / "evals" / "cases.yaml"
+
+# ------------------------------------------------------------------ the demo tenant, in miniature
+
+NAMESPACE = uuid.UUID("5d0c6c1e-9a52-4b7e-8f3e-6a1f0e2c7b10")
+
+
+def gid(key: str) -> str:
+    """A stable GUID per seed key, so cases can name objects as ${key}."""
+    return str(uuid.uuid5(NAMESPACE, key))
+
+
+# alias: (display name, department, licensed, manager alias, enabled, created) - as in tenant/seed.py
+SEED_USERS: dict[str, tuple[str, str, bool, str | None, bool, str]] = {
+    "tgarcia": ("Taylor Garcia", "Administration", True, None, True, "2019-03-04T16:00:00Z"),
+    "marcus": ("Marcus Webb", "Accounting", True, "tgarcia", True, "2018-06-11T16:00:00Z"),
+    "kevin": ("Kevin Brooks", "Operations", True, "tgarcia", True, "2020-01-13T16:00:00Z"),
+    "dennis": ("Dennis Okafor", "Facilities", False, "tgarcia", True, "2026-10-05T16:00:00Z"),
+    "jlee": ("Jordan Lee", "Operations", False, "kevin", True, "2021-05-03T16:00:00Z"),
+    "sbaker": ("Sophie Baker", "Accounting", False, "tgarcia", True, "2022-02-07T16:00:00Z"),
+    "luis.ortega": ("Luis Ortega", "Facilities", False, "dennis", True, "2025-08-18T16:00:00Z"),
+    "grace.kim": ("Grace Kim", "Accounting", False, "marcus", True, "2026-04-06T16:00:00Z"),
+    "nina.alvarez": ("Nina Alvarez", "Accounting", False, "marcus", False, "2024-09-09T16:00:00Z"),  # left in 2026
+    "reports": ("Reports Service", "IT", False, None, True, "2020-01-02T16:00:00Z"),  # service account
+}
+# key: (display name, kind, members, owners, roleAssignable)
+SEED_GROUPS: dict[str, tuple[str, str, list[str], list[str], bool]] = {
+    "accounting": ("Accounting", "m365", ["marcus", "sbaker", "grace.kim"], ["tgarcia"], False),
+    "finance_files": ("Finance Files", "security", ["marcus"], ["tgarcia"], False),
+    "rds_users": ("RDS-Users", "security", ["marcus", "kevin"], ["tgarcia"], False),
+    "vpn_users": ("VPN-Users", "security", ["marcus", "kevin", "tgarcia"], ["tgarcia"], False),
+    "org_wide": ("Northwind Parking", "m365", list(SEED_USERS), ["tgarcia"], False),
+    "accounting_announce": ("accounting-announce", "distribution_list", ["marcus"], [], False),
+    "it_admins": ("IT Admins", "security", ["tgarcia"], ["tgarcia"], True),
+    "field_ops": ("Field Operations", "m365", ["kevin", "jlee"], ["kevin"], False),
+    "supervisors": ("Parking Supervisors", "security", ["kevin", "jlee"], ["kevin"], False),
+    "nw_ops": ("Northwind Operations", "m365", ["tgarcia", "kevin", "sbaker", "grace.kim"], ["tgarcia"], False),
+}
+SKU_PART = "O365_BUSINESS_ESSENTIALS"
+SEATS = 4  # Marcus, Kevin, Taylor and seat-holder: 0 free, so onboarding has to buy one (§10)
+
+
+def seed(tenant: FakeTenant) -> dict[str, str]:
+    """Seed the FakeTenant like tenant/seed.py. Returns the ${name} -> value map cases are written with."""
+    ids = {"domain": DOMAIN, "sku": tenant.add_sku(gid("sku"), SKU_PART, SEATS)}
+    for alias, (name, dept, licensed, _, enabled, created) in SEED_USERS.items():
+        uid = ids[alias] = tenant.add_user(alias, name, gid(alias))
+        tenant.users[uid] |= {"department": dept, "accountEnabled": enabled, "createdDateTime": created,
+                              "surname": name.split()[-1]}
+        if licensed:
+            tenant.licenses[uid] = {ids["sku"]}
+    for alias, (_, _, _, manager, _, _) in SEED_USERS.items():
+        if manager:
+            tenant.managers[ids[alias]] = ids[manager]
+    tenant.users[tenant.seat_holder]["accountEnabled"] = False
+    tenant.licenses[tenant.seat_holder] = {ids["sku"]}
+    for key, (name, kind, members, owners, privileged) in SEED_GROUPS.items():
+        ids[key] = tenant.add_group(gid(key), name, kind, privileged)
+        tenant.members[ids[key]] = {ids[m] for m in members}
+        tenant.owners[ids[key]] = {ids[o] for o in owners}
+    ids["dennis_phone"] = tenant.add_auth_method(ids["dennis"], mid=gid("dennis_phone"))
+    ids["luis_phone"] = tenant.add_auth_method(ids["luis.ortega"], name="Pixel 8", mid=gid("luis_phone"))
+    for key in ("nw_ops_drive", "q3_rates", "q3_v1", "q3_v2", "q3_v3", "staffing", "staffing_v1"):
+        ids[key] = gid(key)  # the team site's files; FakeTenant serves them from Week 4 Day 18
+    return ids
+
+
+def apply_setup(tenant: FakeTenant, ids: dict[str, str], setup: dict[str, Any]) -> None:
+    """Case-specific tenant state on top of the seed."""
+    for alias, when in setup.get("last_sign_in", {}).items():
+        tenant.users[ids[alias]]["signInActivity"] = {"lastSignInDateTime": when,
+                                                      "lastSuccessfulSignInDateTime": when}
+    for row in setup.get("sign_ins", []):
+        tenant.sign_ins.append({
+            "userId": ids[row["user"]], "createdDateTime": row["time"], "appDisplayName": row.get("app", "Office"),
+            "ipAddress": row.get("ip"), "clientAppUsed": "Browser",
+            "status": {"errorCode": row.get("errorCode", 0), "failureReason": row.get("failureReason")},
+            "location": {"city": row.get("city"), "countryOrRegion": row.get("country")}})
+    if "playbooks" in setup:
+        raise NotImplementedError("learned playbooks need the playbook store (Week 4 Day 17-19)")
+
+
+# ------------------------------------------------------------------ cases
+
+PLACEHOLDER = re.compile(r"\$\{([\w.-]+)\}")
+
+
+def fill(value: Any, ids: dict[str, str]) -> Any:
+    """Replace ${name} with the seeded value, everywhere in a case. An unknown name is a typo: KeyError."""
+    if isinstance(value, str):
+        return PLACEHOLDER.sub(lambda m: ids[m.group(1)], value)
+    if isinstance(value, dict):
+        return {k: fill(v, ids) for k, v in value.items()}
+    if isinstance(value, list):
+        return [fill(v, ids) for v in value]
+    return value
+
+
+def load_cases() -> list[dict[str, Any]]:
+    return yaml.safe_load(CASES_FILE.read_text())["cases"]
+
+
+def plan_data(raw: dict[str, Any]) -> dict[str, Any]:
+    """The recorded plan, with the step fields a recording leaves out filled in: depends_on, rationale,
+    expected and the catalogue's risk class (the gate recomputes it anyway)."""
+    steps = []
+    for s in raw.get("steps", []):
+        step = {"depends_on": [], "rationale": "recorded", "expected": {}} | s
+        if "risk_class" not in step:
+            spec = ACTIONS.get(step["action"])
+            step["risk_class"] = spec.risk(spec.params.model_validate(step["params"])) if spec else "none"
+        steps.append(step)
+    return raw | {"steps": steps}
+
+
+def triage_data(case: dict[str, Any], ids: dict[str, str]) -> dict[str, Any]:
+    alias = case["from"]
+    name = SEED_USERS[alias][0] if alias in SEED_USERS else alias
+    return {"entities": {}, "requester": {"name": name, "email": f"{alias}@{ids['domain']}"}} | case["triage"]
+
+
+# ------------------------------------------------------------------ recorded model output
+
+
+def investigator_model(case: dict[str, Any], plan: dict[str, Any]) -> FunctionModel:
+    """Plays the recorded investigation: the reads (and findings) in one turn, then the plan. Asked again
+    (a lint retry), it submits the same plan: a recording can't learn from the linter."""
+    reads = [ToolCallPart(tool, args or {}) for tool, args in case.get("reads", [])]
+    reads += [ToolCallPart("record_finding", {"finding": f}) for f in case.get("findings", [])]
+    turns = 0
+
+    def respond(messages, info: AgentInfo) -> ModelResponse:
+        nonlocal turns
+        turns += 1
+        if turns == 1 and reads:
+            return ModelResponse(parts=reads)
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, plan)])
+
+    return FunctionModel(respond)
+
+
+# ------------------------------------------------------------------ invariants
+
+
+def bypasses(events) -> list[str]:
+    """Steps that ran without the gate's say-so: no gate_decision before them, a `block`, or an `approve`
+    with no approval before it. A follow-up's run (`<step>-run`) answers to its scheduling step's decision."""
+    decisions: dict[str, str] = {}
+    approved = False
+    problems = []
+    for e in events:
+        p = e.payload
+        if e.type == "gate_decision":
+            decisions[p["step_id"]] = p["decision"]
+        elif e.type == "approval" and p["decision"] == "approve":
+            approved = True
+        elif e.type == "step_started":
+            sid = p["step_id"]
+            decision = decisions.get(sid, decisions.get(sid.removesuffix("-run")))
+            if decision is None:
+                problems.append(f"{sid} ran with no gate decision")
+            elif decision == "block":
+                problems.append(f"{sid} ran although the gate blocked it")
+            elif decision == "approve" and not approved:
+                problems.append(f"{sid} needed approval and ran without one")
+    return problems
+
+
+def transcript_of(events) -> Transcript:
+    t = Transcript()
+    for e in events:
+        if e.type == "tool_call":
+            t.record(e.payload["tool"], e.payload["args"], e.payload["result"] if e.payload["ok"] else None,
+                     e.payload["error"])
+    return t
+
+
+# ------------------------------------------------------------------ assertions
+
+
+def decision_text(d: dict[str, Any], want: str) -> str:
+    return f"{d['decision']}/{d['rule_id']}" if "/" in want else d["decision"]
+
+
+def check(case: dict[str, Any], expect: dict[str, Any], store: Store, run_id: int, tenant: FakeTenant,
+          after_start: RunState, plan: dict[str, Any], ids: dict[str, str]) -> list[str]:
+    """Every mismatch between the run and the case's expectations, as readable lines."""
+    events = store.events(run_id)
+    of = {t: [e.payload for e in events if e.type == t] for t in {e.type for e in events}}
+    last_state = of["state"][-1]
+    problems = bypasses(events)
+    problems += ["a TAP value is in the event log"] if any(TAP_VALUE in json.dumps(e.payload) for e in events) else []
+
+    def fail(what: str, want: Any, got: Any) -> None:
+        problems.append(f"{what}: expected {want!r}, got {got!r}")
+
+    if (want := expect.get("intents")) is not None:
+        got = of["triage"][-1]["triage"]["intents"]
+        if got != want:
+            fail("intents", want, got)
+
+    if (want := expect.get("lint")) is not None:
+        lints = of.get("lint_result", [])
+        got = lints[-1]["problems"] if lints else []
+        if want == "ok" and got:
+            fail("lint", "ok", got)
+        elif want != "ok" and not all(any(w.casefold() in g.casefold() for g in got) for w in want):
+            fail("lint problems", want, got)
+
+    if (want := expect.get("gate")) is not None:
+        got = {d["step_id"]: d for d in of.get("gate_decision", [])}
+        if set(got) != set(want):
+            fail("gated steps", sorted(want), sorted(got))
+        for sid, w in want.items():
+            if sid in got and decision_text(got[sid], w) != w:
+                fail(f"gate {sid}", w, decision_text(got[sid], w))
+
+    if (want := expect.get("gate_direct")) is not None:  # the gate on the plan as recorded, lint or not
+        triage = of["triage"][-1]["triage"]
+        result = gate.evaluate(Plan.model_validate(plan), requester_approved=of["triage"][-1]["requester_approved"],
+                               intents=triage["intents"], playbooks=load_playbooks(triage["intents"], DOMAIN),
+                               facts=load_client_facts(DOMAIN), transcript=transcript_of(events))
+        got = {d.step_id: d.model_dump() for d in result.decisions}
+        for sid, w in want.items():
+            if sid not in got or decision_text(got[sid], w) != w:
+                fail(f"gate (direct) {sid}", w, got.get(sid) and decision_text(got[sid], w))
+
+    if (want := expect.get("after_start")) is not None and after_start != want:
+        fail("state after start", want, after_start.value)
+    if (want := expect.get("state")) is not None and last_state["to"] != want:
+        fail("final state", want, f"{last_state['to']} ({last_state.get('kind')}: {last_state.get('reason')})")
+
+    if (want := expect.get("escalation")) is not None:
+        for key, w in want.items():
+            got = last_state.get(key)
+            if w is True:
+                if not got:
+                    fail(f"escalation {key}", "present", got)
+            elif key == "kind":
+                if got != w:
+                    fail("escalation kind", w, got)
+            elif w.casefold() not in str(got).casefold():
+                fail(f"escalation {key}", f"...{w}...", got)
+
+    if (want := expect.get("dod")) is not None:
+        checks = of.get("done_check", [])
+        if want.get("ok") and (not checks or not all(c["ok"] for c in checks)):
+            fail("definition of done", "all probes ok", [c for c in checks if not c["ok"]] or "no probes ran")
+        if set(want.get("probes", [])) - {c["probe"] for c in checks}:
+            fail("DoD probes run", sorted(want["probes"]), sorted({c["probe"] for c in checks}))
+
+    if (want := expect.get("writes")) is not None:
+        writes = [f"{m} {p}" for m, p, _ in tenant.calls if m != "GET"]
+        if len(writes) != want:
+            fail("Graph writes", want, writes)
+
+    if (want := expect.get("approvals")) is not None and len(of.get("approval", [])) != want:
+        fail("approvals", want, len(of.get("approval", [])))
+
+    for tool in expect.get("reads_ok", []):
+        if not any(c["tool"] == tool and c["ok"] for c in of.get("tool_call", [])):
+            fail("read", f"{tool} succeeded", [c.get("error") for c in of.get("tool_call", []) if c["tool"] == tool])
+
+    for tool, text in expect.get("tool_results", []):
+        results = [json.dumps(c["result"]) for c in of.get("tool_call", []) if c["tool"] == tool and c["ok"]]
+        if not any(text in r for r in results):
+            fail(f"{tool} result", f"...{text}...", results)
+
+    for f in expect.get("followups", []):
+        rows = [r for r in scheduler.for_run(store, run_id) if r.kind == f["kind"]]
+        if not any(r.run_at.date().isoformat() == f["date"] for r in rows):
+            fail(f"{f['kind']} follow-up", f["date"], [r.run_at.isoformat() for r in rows])
+
+    if expect.get("library_unchanged"):
+        raise NotImplementedError("checking the playbook library needs the playbook store (Week 4 Day 17-19)")
+
+    problems += plan_problems(expect.get("plan", {}), of["plan"][-1]["plan"] if "plan" in of else None)
+    return problems
+
+
+def plan_problems(want: dict[str, Any], plan: dict[str, Any] | None) -> list[str]:
+    """Checks on what the plan says: each list holds substrings that must appear in that part of the plan."""
+    if not want:
+        return []
+    if plan is None:
+        return ["no plan was recorded"]
+    parts = {
+        "out_of_scope": plan["out_of_scope_requests"],
+        "questions": plan["questions_for_requester"],
+        "needs_technician": [f"{t['item']} {t['reason']}" for t in plan["needs_technician"]],
+        "confirm": [f"{c['key']} {c['question']} {c['proposed']}" for c in plan["confirm_on_approval"]],
+        "mentions": [json.dumps(plan)],
+    }
+    problems = []
+    for key, texts in want.items():
+        if key == "no_actions":
+            if used := sorted({s["action"] for s in plan["steps"]} & set(texts)):
+                problems.append(f"plan uses {used}, which it must not")
+            continue
+        for text in texts:
+            if not any(text.casefold() in p.casefold() for p in parts[key]):
+                problems.append(f"plan {key}: nothing mentions {text!r} in {parts[key]!r}")
+    return problems
+
+
+# ------------------------------------------------------------------ the offline tier
+
+
+async def run_case(case: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    """Run one case offline. Returns (problems, a summary for the failure message)."""
+    tenant = FakeTenant(DOMAIN)
+    ids = seed(tenant)
+    case = fill(case, ids)
+    apply_setup(tenant, ids, case.get("setup", {}))
+    plan = plan_data(case["plan"])
+
+    async def tokens():
+        return "tok", time.time() + 3600
+
+    async def no_sleep(_: float) -> None:
+        pass
+
+    store = Store("sqlite://")
+    with respx.mock(assert_all_called=False) as router:
+        router.route(host="graph.microsoft.com").mock(side_effect=tenant)
+        graph = GraphClient(tokens, sleep=no_sleep)
+        rt = runner.Runtime(store=store, graph=graph, facts=load_client_facts(DOMAIN), domain=DOMAIN, link_key=LINK_KEY,
+                            sleep=no_sleep, closeout_model=drafts_model(), clean_sign_ins_for=ids["dennis"])
+        try:
+            sender = f"{case['from']}@{DOMAIN}"
+            run_id = store.create_run(store.create_ticket(case["ticket"], sender).id).id
+            after_start = await runner.start(
+                rt, run_id, case["ticket"], sender,
+                intake_model=TestModel(custom_output_args=triage_data(case, ids)),
+                investigator_model=investigator_model(case, plan))
+            for action in case.get("then", []):
+                if "oob" in action:
+                    runner.confirm_oob(rt, run_id, by=action["oob"])
+                if "approve" in action:
+                    await runner.approve(rt, run_id, by=action["approve"], answers=action.get("answers"))
+                if "reject" in action:
+                    await runner.approve(rt, run_id, by=action["reject"], reject=True)
+        finally:
+            await graph.aclose()
+
+    problems = check(case, case.get("expect", {}), store, run_id, tenant, after_start, plan, ids)
+    summary = {"states": [e.payload["to"] for e in store.events_of(run_id, "state")],
+               "last": store.last_event(run_id, "state").payload,
+               "gate": [(e.payload["step_id"], e.payload["decision"], e.payload["rule_id"])
+                        for e in store.events_of(run_id, "gate_decision")]}
+    return problems, summary
+
+
+def case_params() -> list:
+    params = []
+    for case in load_cases():
+        marks = [pytest.mark.xfail(reason=case["xfail"], strict=True)] if case.get("xfail") else []
+        params.append(pytest.param(case, id=f"{case['id']}-{case['name']}", marks=marks))
+    return params
+
+
+@pytest.mark.parametrize("case", case_params())
+async def test_offline(case):
+    problems, summary = await run_case(case)
+    assert not problems, "\n".join([f"case {case['id']} ({case['name']}):", *problems, f"run: {summary}"])
+
+
+# ------------------------------------------------------------------ the harness itself
+
+
+def test_cases_cover_tech_md_section_11():
+    ids = [str(c["id"]) for c in load_cases()]
+    assert len(ids) == len(set(ids)), "case ids must be unique"
+    assert {str(n) for n in range(1, 29)} <= set(ids)
+    for case in load_cases():
+        if case["id"] in range(23, 29):
+            assert case.get("xfail", "").startswith("Week 4 Day"), f"case {case['id']} lands later in Week 4"
+
+
+def test_the_bypass_check_catches_each_kind_of_bypass():
+    class E:
+        def __init__(self, type, **payload):
+            self.type, self.payload = type, payload
+
+    gated = [E("gate_decision", step_id="a", decision="auto"), E("gate_decision", step_id="b", decision="approve"),
+             E("gate_decision", step_id="c", decision="block")]
+    assert bypasses([*gated, E("step_started", step_id="a")]) == []
+    assert bypasses([E("step_started", step_id="x")]) == ["x ran with no gate decision"]
+    assert "ran although the gate blocked it" in bypasses([*gated, E("step_started", step_id="c")])[0]
+    assert "without one" in bypasses([*gated, E("step_started", step_id="b")])[0]
+    assert bypasses([*gated, E("approval", decision="approve"), E("step_started", step_id="b")]) == []
+    assert bypasses([*gated, E("approval", decision="reject"), E("step_started", step_id="b")]) != []
+    assert bypasses([*gated, E("step_started", step_id="a-run")]) == []  # a follow-up's run

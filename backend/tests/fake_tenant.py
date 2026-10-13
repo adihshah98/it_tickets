@@ -5,6 +5,10 @@
 
 Holds users, group members, licenses and TAPs, and can fail the next N calls on a path prefix
 (`tenant.fail("POST", "/groups/", 404, 404)`) to exercise replication lag and hard errors.
+
+It also answers the investigator's reads (users.search/list/get, memberOf with group kinds, ownedObjects,
+the license pool), so the eval harness can run a whole ticket against it. Groups and SKUs registered with
+`add_group`/`add_sku` carry the fields those reads return; unregistered ones still work as bare ids.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ import json
 import re
 import uuid
 from datetime import UTC, datetime
+from urllib.parse import unquote_plus
 
 import httpx
 
@@ -35,7 +40,10 @@ class FakeTenant:
         self.rules: dict[str, list[dict]] = {}      # uid -> inbox messageRules
         self.auth_methods: dict[str, list[dict]] = {}  # uid -> registered methods (besides TAPs), as Graph lists them
         self.risky: dict[str, dict] = {}            # uid -> riskyUser; absent = never flagged (404)
-        self.sign_ins: list[dict] = []              # the audit log's sign-in rows (the $filter isn't applied)
+        self.sign_ins: list[dict] = []              # sign-in rows; filtered by userId when a row has one
+        self.groups: dict[str, dict] = {}           # groupId (lower) -> group object, as Graph returns it
+        self.skus: dict[str, dict] = {}             # skuId (lower) -> {skuPartNumber, enabled}
+        self.managers: dict[str, str] = {}          # uid -> manager uid
         self.calls: list[tuple[str, str, dict | None]] = []
         self._failures: list[list] = []
         self.stale_member_reads = 0  # memberOf reads that don't show new memberships yet (directory lag)
@@ -59,6 +67,38 @@ class FakeTenant:
             {"id": mid, "@odata.type": f"#microsoft.graph.{kind}", "displayName": name, "segment": segment})
         return mid
 
+    def add_group(self, gid: str, name: str, kind: str = "security", role_assignable: bool = False) -> str:
+        """Register a group. `kind` is how reads.classify will see it: m365 | security | mail_security |
+        distribution_list."""
+        flags = {"m365": (["Unified"], True, False), "security": ([], False, True),
+                 "mail_security": ([], True, True), "distribution_list": ([], True, False)}[kind]
+        self.groups[gid.lower()] = {"@odata.type": "#microsoft.graph.group", "id": gid, "displayName": name,
+                                    "groupTypes": flags[0], "mailEnabled": flags[1], "securityEnabled": flags[2],
+                                    "mail": None, "isAssignableToRole": role_assignable}
+        return gid
+
+    def add_sku(self, sku_id: str, part_number: str, enabled: int) -> str:
+        self.skus[sku_id.lower()] = {"skuId": sku_id, "skuPartNumber": part_number, "enabled": enabled}
+        return sku_id
+
+    def _group(self, gid: str) -> dict:
+        return self.groups.get(gid.lower(), {"@odata.type": "#microsoft.graph.group", "id": gid})
+
+    def _part_number(self, sku_id: str) -> str:
+        return self.skus.get(sku_id.lower(), {}).get("skuPartNumber", "SPB")
+
+    def _list_users(self, query: str) -> list[dict]:
+        """GET /users: `id eq '…'` (the signInActivity read), startswith(...) (users.search), or every user."""
+        if m := re.search(r"id eq '([^']+)'", query):
+            user = self.users.get(m.group(1))
+            return [user | {"signInActivity": user.get("signInActivity")}] if user else []
+        if m := re.search(r"startswith\(displayName,'([^']*)'\)", query):
+            prefix = m.group(1).lower()
+            return [u for u in self.users.values()
+                    if any(str(u.get(k) or "").lower().startswith(prefix)
+                           for k in ("displayName", "surname", "userPrincipalName"))]
+        return list(self.users.values())
+
     def fail(self, method: str, prefix: str, *statuses: int, message: str = "boom") -> None:
         self._failures.append([method, prefix, list(statuses), message])
 
@@ -78,9 +118,11 @@ class FakeTenant:
             method, prefix, statuses, message = failure
             if statuses and request.method == method and path.startswith(prefix):
                 return error(statuses.pop(0), message)
-        return self._route(request.method, path, body)
+        return self._route(request.method, path, body, unquote_plus(request.url.query.decode()))
 
-    def _route(self, method: str, path: str, body: dict | None) -> httpx.Response:
+    def _route(self, method: str, path: str, body: dict | None, query: str = "") -> httpx.Response:
+        if method == "GET" and path == "/users":
+            return httpx.Response(200, json={"value": self._list_users(query)})
         if method == "POST" and path == "/users":
             if self.user_by_upn(body["userPrincipalName"]):
                 return error(400, "Another object with the same value for property userPrincipalName already exists.")
@@ -88,9 +130,14 @@ class FakeTenant:
             self.users[uid] = {k: v for k, v in body.items() if k != "passwordProfile"} | {"id": uid}
             return httpx.Response(201, json=self.users[uid])
         if method == "GET" and path == "/subscribedSkus":
-            return httpx.Response(200, json={"value": []})
+            consumed = [s.lower() for skus in self.licenses.values() for s in skus]
+            return httpx.Response(200, json={"value": [
+                {"skuId": s["skuId"], "skuPartNumber": s["skuPartNumber"], "prepaidUnits": {"enabled": s["enabled"]},
+                 "consumedUnits": consumed.count(key)} for key, s in self.skus.items()]})
         if method == "GET" and path == "/auditLogs/signIns":
-            return httpx.Response(200, json={"value": self.sign_ins})
+            m = re.search(r"userId eq '([^']+)'", query)
+            rows = [r for r in self.sign_ins if not m or r.get("userId", m.group(1)).lower() == m.group(1).lower()]
+            return httpx.Response(200, json={"value": rows})
         if m := re.fullmatch(r"/identityProtection/riskyUsers/([^/]+)", path):
             if (risky := self.risky.get(m.group(1).lower())) is None:
                 return error(404, "riskyUser not found", "ResourceNotFound")
@@ -138,8 +185,15 @@ class FakeTenant:
                 user.update(body)
                 return httpx.Response(204)
             case "GET", "/licenseDetails":
-                return httpx.Response(200, json={"value": [{"skuId": s, "skuPartNumber": "SPB"}
+                return httpx.Response(200, json={"value": [{"skuId": s, "skuPartNumber": self._part_number(s)}
                                                            for s in sorted(self.licenses.get(uid, set()))]})
+            case "GET", "/manager":
+                if (manager := self.users.get(self.managers.get(uid, ""))) is None:
+                    return error(404, "Resource 'manager' does not exist", "Request_ResourceNotFound")
+                return httpx.Response(200, json=manager)
+            case "GET", "/ownedObjects":
+                return httpx.Response(200, json={"value": [self._group(g) for g, us in self.owners.items()
+                                                           if uid in us]})
             case "POST", "/assignLicense":
                 skus = self.licenses.setdefault(uid, set())
                 skus |= {a["skuId"] for a in body["addLicenses"]}
@@ -149,7 +203,8 @@ class FakeTenant:
                 self.stale_member_reads -= 1
                 return httpx.Response(200, json={"value": []})
             case "GET", "/memberOf":
-                return httpx.Response(200, json={"value": [{"id": g} for g, us in self.members.items() if uid in us]})
+                return httpx.Response(200, json={"value": [self._group(g) for g, us in self.members.items()
+                                                           if uid in us]})
             case "POST", "/authentication/temporaryAccessPassMethods":
                 tap = {"id": str(uuid.uuid4()), "startDateTime": body.get("startDateTime")
                        or datetime.now(UTC).isoformat(), "lifetimeInMinutes": body["lifetimeInMinutes"],
