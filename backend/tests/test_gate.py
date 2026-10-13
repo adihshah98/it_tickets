@@ -9,9 +9,9 @@ from tech.safety import gate
 from tech.safety.policy import NO_PLAYBOOK_ALLOWED
 
 
-def evaluate(plan, transcript, playbooks, facts, *, approved=True, intents=("user.onboard",)):
+def evaluate(plan, transcript, playbooks, facts, *, approved=True, intents=("user.onboard",), unproven=()):
     return gate.evaluate(plan, requester_approved=approved, intents=intents, playbooks=playbooks, facts=facts,
-                         autonomy=facts.autonomy, transcript=transcript)
+                         autonomy=facts.autonomy, unproven=unproven, transcript=transcript)
 
 
 def decisions(result) -> dict[str, tuple[str, str]]:
@@ -146,6 +146,25 @@ def test_a3_auto_approves_an_offboard_revoke_outside_an_approved_requester(trans
     assert decisions(a3)["block"] == ("auto", "autonomy.a3.access.revoke")
 
 
+def test_an_unproven_playbook_needs_approval_for_every_write_below_a3(transcript, playbooks, facts):
+    """A learned or written playbook (Build-Day19): A2 doesn't auto a reversible write; A3 does."""
+    a2 = decisions(evaluate(plan_with(), transcript, playbooks, facts, unproven={"user.onboard"}))
+    assert a2["create_user"] == ("approve", "autonomy.unproven")
+    assert a2["add_accounting"] == ("approve", "autonomy.unproven")
+    assert a2["send_link"] == ("auto", "risk.none")          # not a write
+    assert a2["tap"] == ("approve", "autonomy.unproven")     # approve either way; the first rule's reason wins
+    a3 = decisions(evaluate(plan_with(), transcript, playbooks, at_level(facts, "A3"), unproven={"user.onboard"}))
+    assert a3["create_user"] == ("auto", "autonomy.a3.write.reversible")
+    assert a3["tap"] == ("approve", "risk.security.credential")
+    a1 = evaluate(plan_with(), transcript, playbooks, at_level(facts, "A1"), unproven={"user.onboard"})
+    assert all(d.rule_id == "autonomy.a1" for d in a1.decisions)
+
+
+def test_shipped_playbooks_are_not_unproven(transcript, playbooks, facts):
+    assert decisions(evaluate(plan_with(), transcript, playbooks, facts, unproven={"file.restore_version"})) == \
+        decisions(evaluate(plan_with(), transcript, playbooks, facts))
+
+
 # ------------------------------------------------------------------ check: events and run state
 
 
@@ -160,7 +179,7 @@ def new_run(store) -> int:
 
 def check(store, run_id, plan, transcript, playbooks, facts, approved=True):
     return gate.check(store, run_id, plan, requester_approved=approved, intents=["user.onboard"],
-                      playbooks=playbooks, facts=facts, autonomy=facts.autonomy, transcript=transcript,
+                      playbooks=playbooks, facts=facts, autonomy=facts.autonomy, unproven=(), transcript=transcript,
                       findings=["Marcus is the peer"])
 
 

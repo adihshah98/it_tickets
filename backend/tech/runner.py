@@ -7,7 +7,7 @@
               `execute` as a background task.
     resume    carries on an execution a crashed process left in EXECUTING.
     close-out runs once the steps verify (CLOSING): DoD probes, reply and PSA note, time entry; a failed
-              DoD escalates.
+              DoD escalates. A failed DoD or step also demotes any playbook the run used at A3 to A2.
 
 Each call can run in a new process (the CLI): what a run needs is rebuilt from its events: the plan
 from `plan`, the intents from `triage`, the approver's answers from `approval`, finished steps and
@@ -21,6 +21,7 @@ import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
@@ -63,6 +64,8 @@ for _state in S:  # any live run can escalate or be held (§3)
 
 ANSWER_KEYS = ("upn_format", "start_date")
 
+LEARNED_DIR = REPO / "backend" / "tests" / "evals" / "learned"  # Build-Day19 decision 9
+
 
 class RunError(RuntimeError):
     """A request the run can't take in its current state (e.g. approving a DONE run)."""
@@ -81,10 +84,11 @@ class Runtime:
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     closeout_model: Any = CLOSEOUT_MODEL
     clean_sign_ins_for: str | None = None  # MFA demo only: settings.mfa_demo_clean_user
+    learned_dir: Path | None = None  # where approved playbooks' source runs are recorded (None: not recorded)
     library: PlaybookLibrary = field(init=False)
 
     def __post_init__(self) -> None:
-        self.library = PlaybookLibrary(self.store, self.domain, self.facts)
+        self.library = PlaybookLibrary(self.store, self.domain, self.facts, learned_dir=self.learned_dir)
         self.library.sync_shipped()
 
     @classmethod
@@ -97,7 +101,8 @@ class Runtime:
             (REPO / "data").mkdir(exist_ok=True)
         return cls(store=Store(settings.database_url), graph=graph_from_settings(settings),
                    facts=load_client_facts(settings.domain), domain=settings.domain,
-                   link_key=ensure_link_key(settings), clean_sign_ins_for=settings.mfa_demo_clean_user)
+                   link_key=ensure_link_key(settings), clean_sign_ins_for=settings.mfa_demo_clean_user,
+                   learned_dir=LEARNED_DIR)
 
 
 def transition(store: Store, run_id: int, to: RunState, **detail: Any) -> None:
@@ -226,6 +231,7 @@ async def start(rt: Runtime, run_id: int, text: str, from_address: str, *,
         plan = result.plan
         gate.check(rt.store, run_id, plan, requester_approved=check.approved, intents=triage.intents,
                    playbooks=result.playbooks, facts=rt.facts, autonomy=rt.library.autonomy(),
+                   unproven=rt.library.unproven(),
                    transcript=result.transcript, findings=result.findings)
         if not plan.steps and plan.questions_for_requester and rt.store.get_run(run_id).state in (S.PLAN_CHECKED,
                                                                                                   S.HELD):
@@ -321,9 +327,10 @@ async def execute(rt: Runtime, run_id: int, plan: Plan) -> None:
         failed = await closeout.close_out(rt.store, rt.graph, run_id, plan, facts=rt.facts, library=rt.library,
                                           secrets=execution.secrets, model=rt.closeout_model, sleep=rt.sleep)
         if failed:
-            transition(rt.store, run_id, S.ESCALATED, kind="dod",
-                       reason=f"definition of done not met: {', '.join(failed)}", failed_probes=failed,
+            reason = f"definition of done not met: {', '.join(failed)}"
+            transition(rt.store, run_id, S.ESCALATED, kind="dod", reason=reason, failed_probes=failed,
                        findings=findings(rt.store, run_id))
+            rt.library.demote_on_failure(run_id, reason)
         else:
             transition(rt.store, run_id, S.DONE)
         return
@@ -337,6 +344,7 @@ async def execute(rt: Runtime, run_id: int, plan: Plan) -> None:
         rollback=[{"step_id": d["step_id"], "action": d["action"], "compensate": ACTIONS[d["action"]].compensate}
                   for d in reversed(done) if not d.get("skipped") and d["step_id"] in by_id],
     )
+    rt.library.demote_on_failure(run_id, f"{result.failed_step}: {result.error}")
 
 
 # ------------------------------------------------------------------ follow-ups

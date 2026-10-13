@@ -2,8 +2,8 @@
 
 Plain code, evaluated after the linter. Risk classes come from the catalogue, never from the plan.
 Rule order: requester hold, then never/catalogue blocks, then (rule 3) the no-playbook allow-list, then
-the autonomy level, then risk-class rules, then the blast-radius guard. The first rule that blocks wins;
-otherwise the strictest decision wins. Autonomy is per intent per client (§8, from
+the autonomy level (and the unproven rule below), then risk-class rules, then the blast-radius guard.
+The first rule that blocks wins; otherwise the strictest decision wins. Autonomy is per intent per client (§8, from
 PlaybookLibrary.autonomy()): A1 blocks every write (a technician checklist), A2 leaves the risk-class
 rules in force, and A3 auto-approves reversible/revoke writes but never spend, data.access or
 security.credential. On an MFA reset a credential step is
@@ -15,6 +15,11 @@ policy.NO_PLAYBOOK_ALLOWED, or above policy.NO_PLAYBOOK_RISKS, is `block` (no_pl
 every other step is `approve` (no_playbook.approve). It replaces the autonomy and risk-class rules, so no
 autonomy level, A3 included, can make a no-playbook write automatic.
 
+Unproven playbooks (Build-Day19): an intent whose current playbook was learned or written, not shipped,
+has every write `approve` (autonomy.unproven) below A3. The risk-class rules alone would let A2 run a
+reversible write unasked, so a learned playbook's A2 cap and its demotion to A2 would change nothing. A3
+(earned by a successful approved run, PlaybookLibrary.ceiling) is what lets it run hands-free.
+
 `evaluate` is pure. `check` records its result on a run: a gate_decision event per step, then the
 next state. The Day 5 runner calls `check` too.
 """
@@ -22,7 +27,7 @@ next state. The Day 5 runner calls `check` too.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from tech.core.models import GateDecision, Plan, RiskClass, StepBase
@@ -100,7 +105,7 @@ def _risk_rule(risk: RiskClass, intents: Sequence[str], requester_approved: bool
 
 
 def _step(step: StepBase, *, intents: Sequence[str], requester_approved: bool, allowed: set[str],
-          no_playbook: bool, facts: ClientFacts, autonomy_levels: Mapping[str, str],
+          no_playbook: bool, facts: ClientFacts, autonomy_levels: Mapping[str, str], unproven: Collection[str],
           transcript: Transcript) -> tuple[_Verdicts, RiskClass | None]:
     verdicts = _Verdicts()
     spec = ACTIONS.get(step.action)
@@ -129,6 +134,9 @@ def _step(step: StepBase, *, intents: Sequence[str], requester_approved: bool, a
     autonomy = autonomy_level(intents, autonomy_levels)
     if autonomy == "A1":  # the client runs this intent as a technician checklist; the agent writes nothing
         verdicts.add("block", "autonomy.a1", "this client reviews every step for this request (autonomy A1)")
+    elif autonomy != "A3" and risk != "none" and (learned := [i for i in intents if i in unproven]):
+        verdicts.add("approve", "autonomy.unproven", f"the {learned[0]} playbook is learned and not yet at A3: "
+                                                     "every change needs approval")
 
     decision, rule, reason = _risk_rule(risk, intents, requester_approved, autonomy)
     if step.risk_class != risk:
@@ -138,11 +146,14 @@ def _step(step: StepBase, *, intents: Sequence[str], requester_approved: bool, a
 
 
 def evaluate(plan: Plan, *, requester_approved: bool, intents: Sequence[str], playbooks: dict[str, Playbook],
-             facts: ClientFacts, autonomy: Mapping[str, str], transcript: Transcript) -> GateResult:
-    """`autonomy` is the per-intent levels from PlaybookLibrary.autonomy()."""
+             facts: ClientFacts, autonomy: Mapping[str, str], unproven: Collection[str],
+             transcript: Transcript) -> GateResult:
+    """`autonomy` is the per-intent levels from PlaybookLibrary.autonomy(); `unproven` the intents whose
+    playbook is learned or written (PlaybookLibrary.unproven())."""
     allowed = allowed_actions(playbooks)
     judged = [(step, *_step(step, intents=intents, requester_approved=requester_approved, allowed=allowed,
-                            no_playbook=not playbooks, facts=facts, autonomy_levels=autonomy, transcript=transcript))
+                            no_playbook=not playbooks, facts=facts, autonomy_levels=autonomy, unproven=unproven,
+                            transcript=transcript))
               for step in plan.steps]
 
     per_class = Counter(risk for _, _, risk in judged if risk is not None)
@@ -163,11 +174,11 @@ def evaluate(plan: Plan, *, requester_approved: bool, intents: Sequence[str], pl
 
 
 def check(store: Store, run_id: int, plan: Plan, *, requester_approved: bool, intents: Sequence[str],
-          playbooks: dict[str, Playbook], facts: ClientFacts, autonomy: Mapping[str, str], transcript: Transcript,
-          findings: Sequence[str] = ()) -> GateResult:
+          playbooks: dict[str, Playbook], facts: ClientFacts, autonomy: Mapping[str, str], unproven: Collection[str],
+          transcript: Transcript, findings: Sequence[str] = ()) -> GateResult:
     """Gate a proposed plan: gate_decision events, PLAN_CHECKED, then HELD / ESCALATED / AWAITING_APPROVAL."""
     result = evaluate(plan, requester_approved=requester_approved, intents=intents, playbooks=playbooks,
-                      facts=facts, transcript=transcript, autonomy=autonomy)
+                      facts=facts, transcript=transcript, autonomy=autonomy, unproven=unproven)
     for decision in result.decisions:
         store.append_event(run_id, "gate_decision", decision.model_dump(mode="json"))
     store.set_state(run_id, RunState.PLAN_CHECKED)

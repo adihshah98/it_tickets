@@ -404,6 +404,8 @@ async def investigate(
         store.append_event(run_id, "plan", {
             "plan": plan.model_dump(mode="json", by_alias=True),
             "no_playbook": no_playbook,
+            # Which version of each playbook this run used: for the autonomy ceiling and demotion (library).
+            "playbook_versions": {i: row.version for i in playbooks if (row := library.current(i)) is not None},
             "usage": {"requests": usage.requests, "tool_calls": usage.tool_calls,
                       "input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens,
                       "cache_read_tokens": usage.cache_read_tokens},

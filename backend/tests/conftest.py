@@ -2,6 +2,7 @@
 (the plan is the one Opus proposed in the Day 3 live run)."""
 
 import copy
+from pathlib import Path
 
 import pytest
 
@@ -210,7 +211,8 @@ def gated(rt, playbooks):
         store.append_event(run_id, "plan", {"plan": plan.model_dump(mode="json", by_alias=True), "usage": {}})
         store.set_state(run_id, RunState.PLAN_PROPOSED)
         gate.check(store, run_id, plan, requester_approved=approved, intents=["user.onboard"], playbooks=playbooks,
-                   facts=rt.facts, autonomy=rt.library.autonomy(), transcript=marcus_transcript())
+                   facts=rt.facts, autonomy=rt.library.autonomy(), unproven=rt.library.unproven(),
+                   transcript=marcus_transcript())
         return run_id
 
     return make
@@ -231,6 +233,16 @@ def executed(rt, gated, tenant):
     return make
 
 
+LEARNED_RESTORE = Path(__file__).parent / "evals" / "playbooks" / "file.restore_version.yaml"
+
+
+def add_learned_restore(library, level: str = "A2", source: str = "agent_run"):
+    """The learned file.restore_version playbook (eval #27's), added without approve()'s checks."""
+    row = library.add_version("file.restore_version", LEARNED_RESTORE.read_text(), source=source)
+    library.set_autonomy("file.restore_version", level, by="test", enforce_ceiling=False)
+    return row
+
+
 SOPHIE = f"sbaker@{DOMAIN}"
 RATES_VERSIONS = [("2026-10-12T14:20:00Z", 12712), ("2026-10-12T16:45:00Z", 12755), ("2026-10-13T09:05:00Z", 12606)]
 
@@ -242,7 +254,11 @@ def restore_gated(rt, tenant):
     from tech.core.store import RunState
     from tech.safety import gate
 
-    def make(version: str = "2.0") -> tuple[int, Plan, str]:
+    def make(version: str = "2.0", *, learned: str | None = None) -> tuple[int, Plan, str]:
+        """`learned`: run it under the learned file.restore_version playbook at this autonomy level instead."""
+        if learned:
+            add_learned_restore(rt.library, learned)
+        playbooks = rt.library.for_intents(["file.restore_version"])
         drive = tenant.add_drive(ACCOUNTING)
         item, _ = tenant.add_file(drive, "Q3 Parking Rates.xlsx", RATES_VERSIONS)
         plan = Plan.model_validate({"intent": "file.restore_version", "summary": "restore", "steps": [
@@ -261,11 +277,13 @@ def restore_gated(rt, tenant):
                                               "requester_approved": True, "requester_scopes": {}})
         for state in (RunState.TRIAGED, RunState.INVESTIGATING):
             store.set_state(run_id, state)
+        versions = {i: rt.library.current(i).version for i in playbooks}
         store.append_event(run_id, "plan", {"plan": plan.model_dump(mode="json", by_alias=True), "usage": {},
-                                            "no_playbook": True})
+                                            "no_playbook": not playbooks, "playbook_versions": versions})
         store.set_state(run_id, RunState.PLAN_PROPOSED)
-        gate.check(store, run_id, plan, requester_approved=True, intents=triage.intents, playbooks={},
-                   facts=rt.facts, autonomy=rt.library.autonomy(), transcript=transcript)
+        gate.check(store, run_id, plan, requester_approved=True, intents=triage.intents, playbooks=playbooks,
+                   facts=rt.facts, autonomy=rt.library.autonomy(), unproven=rt.library.unproven(),
+                   transcript=transcript)
         return run_id, plan, item
 
     return make

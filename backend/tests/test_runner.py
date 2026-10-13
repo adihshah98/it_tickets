@@ -178,3 +178,69 @@ def test_accept_records_the_approval_and_moves_to_executing_without_acting(rt, g
     assert not tenant.calls
     with pytest.raises(RunError, match="EXECUTING"):
         runner.accept(rt, run_id, by=TAYLOR)
+
+
+# ------------------------------------------------------------------ learned playbooks: A3 runs and demotion
+# (Build-Day19 part 1)
+
+RESTORE = "file.restore_version"
+
+
+def states(rt, run_id):
+    return [e.payload["to"] for e in rt.store.events_of(run_id, "state")]
+
+
+async def test_an_all_auto_plan_runs_without_awaiting_approval(rt, restore_gated):
+    run_id, _, _ = restore_gated(learned="A3")
+    assert state(rt, run_id) == RunState.PLAN_CHECKED
+
+    assert await runner.proceed(rt, run_id) == RunState.DONE
+    assert "AWAITING_APPROVAL" not in states(rt, run_id)
+    assert not rt.store.events_of(run_id, "approval") and not rt.store.events_of(run_id, "playbook_demoted")
+
+
+async def test_a_learned_playbook_below_a3_waits_for_approval(rt, restore_gated):
+    run_id, _, _ = restore_gated(learned="A2")
+    [decision] = [e.payload for e in rt.store.events_of(run_id, "gate_decision")]
+    assert (decision["decision"], decision["rule_id"]) == ("approve", "autonomy.unproven")
+    assert state(rt, run_id) == RunState.AWAITING_APPROVAL
+
+
+async def test_a_step_failure_at_a3_demotes_the_playbook_to_a2(rt, restore_gated):
+    run_id, _, _ = restore_gated("9.0", learned="A3")  # no such version: the snapshot refuses, nothing written
+
+    assert await runner.proceed(rt, run_id) == RunState.ESCALATED
+    assert last_state(rt, run_id)["kind"] == "execution"
+    demoted = rt.store.last_event(run_id, "playbook_demoted").payload
+    assert {k: demoted[k] for k in ("intent", "version", "from", "to")} == {
+        "intent": RESTORE, "version": 1, "from": "A3", "to": "A2"}
+    assert rt.library.autonomy()[RESTORE] == "A2"
+
+    next_run, _, _ = restore_gated()  # the next restore needs a person again
+    assert state(rt, next_run) == RunState.AWAITING_APPROVAL
+
+
+async def test_a_dod_failure_at_a3_demotes_the_playbook(rt, restore_gated, tenant):
+    import httpx
+
+    run_id, _, item = restore_gated(learned="A3")
+    real = tenant._drive_route
+
+    def corrupt(method, drive_id, rest):  # the restored file's bytes aren't the chosen version's
+        if rest == f"/items/{item}/content":
+            return httpx.Response(200, content=b"something else")
+        return real(method, drive_id, rest)
+
+    tenant._drive_route = corrupt
+    assert await runner.proceed(rt, run_id) == RunState.ESCALATED
+    assert last_state(rt, run_id)["kind"] == "dod"
+    assert rt.store.last_event(run_id, "playbook_demoted").payload["reason"].startswith("definition of done not met")
+    assert rt.library.autonomy()[RESTORE] == "A2"
+
+
+async def test_a_failure_below_a3_changes_nothing(rt, restore_gated):
+    run_id, _, _ = restore_gated("9.0", learned="A2")
+
+    assert await runner.approve(rt, run_id, by=TAYLOR) == RunState.ESCALATED
+    assert not rt.store.events_of(run_id, "playbook_demoted")
+    assert rt.library.autonomy()[RESTORE] == "A2"

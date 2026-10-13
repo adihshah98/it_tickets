@@ -7,7 +7,9 @@ that is the code under test: the linter in the investigator's output validator, 
 out-of-band confirmation, the executor against the FakeTenant, and close-out with its DoD probes. The case
 runner calls the same `runner` functions the API does, so there is no special path.
 
-What a case asserts (`expect`, all optional) is listed in `check`. Every case also asserts two invariants:
+What a case asserts (`expect`, all optional) is listed in `check`, plus `library_unchanged` (run_case: no
+playbook version or autonomy level changed). `setup.playbooks` starts a case with learned playbooks from
+evals/playbooks/. Every case also asserts two invariants:
   - zero gate bypasses: every step_started follows a gate_decision for that step that isn't `block`,
     and an `approve` step only starts after an `approval`;
   - no TAP value in any event.
@@ -36,18 +38,20 @@ from fake_tenant import TAP_VALUE, FakeTenant
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
+from sqlmodel import select
 
 from tech import runner
 from tech.core.models import Plan
-from tech.core.store import RunState, Store
+from tech.core.store import PlaybookVersion, RunState, Store
 from tech.execution import scheduler
 from tech.execution.catalogue import ACTIONS
 from tech.graph.client import GraphClient
 from tech.graph.reads import Transcript
-from tech.playbooks import load_client_facts, load_playbooks
+from tech.playbooks import PlaybookLibrary, load_client_facts, load_playbooks
 from tech.safety import gate
 
 CASES_FILE = Path(__file__).parent / "evals" / "cases.yaml"
+PLAYBOOKS_DIR = Path(__file__).parent / "evals" / "playbooks"  # learned playbooks cases start with
 
 # ------------------------------------------------------------------ the demo tenant, in miniature
 
@@ -137,8 +141,21 @@ def apply_setup(tenant: FakeTenant, ids: dict[str, str], setup: dict[str, Any]) 
     for key, versions in setup.get("file_versions", {}).items():  # replace a seeded file's history
         item = tenant.files[ids[key]]
         tenant.add_file(item["drive"], item["name"], [tuple(v) for v in versions], item_id=item["id"])
-    if "playbooks" in setup:
-        raise NotImplementedError("learned playbooks need the playbook store (Week 4 Day 17-19)")
+
+
+def apply_library_setup(library: PlaybookLibrary, setup: dict[str, Any]) -> None:
+    """Learned playbooks a case starts with (`setup.playbooks`), from evals/playbooks/<intent>.yaml, at the
+    case's autonomy. They skip approve()'s ceiling: the case states its own history."""
+    for pb in setup.get("playbooks", []):
+        text = (PLAYBOOKS_DIR / f"{pb['intent']}.yaml").read_text()
+        library.add_version(pb["intent"], text, source=pb.get("source", "agent_run"), approved_by="eval")
+        library.set_autonomy(pb["intent"], pb.get("autonomy", "A2"), by="eval", enforce_ceiling=False)
+
+
+def library_state(library: PlaybookLibrary) -> dict[str, Any]:
+    with library.store.session() as s:
+        rows = sorted((r.intent, r.version, r.status) for r in s.exec(select(PlaybookVersion)))
+    return {"versions": rows, "autonomy": library.autonomy()}
 
 
 # ------------------------------------------------------------------ cases
@@ -287,7 +304,7 @@ def check(case: dict[str, Any], expect: dict[str, Any], store: Store, run_id: in
         triage = of["triage"][-1]["triage"]
         result = gate.evaluate(Plan.model_validate(plan), requester_approved=of["triage"][-1]["requester_approved"],
                                intents=triage["intents"], playbooks=load_playbooks(triage["intents"], DOMAIN),
-                               facts=(facts := load_client_facts(DOMAIN)), autonomy=facts.autonomy,
+                               facts=(facts := load_client_facts(DOMAIN)), autonomy=facts.autonomy, unproven=(),
                                transcript=transcript_of(events))
         got = {d.step_id: d.model_dump() for d in result.decisions}
         for sid, w in want.items():
@@ -339,9 +356,6 @@ def check(case: dict[str, Any], expect: dict[str, Any], store: Store, run_id: in
         rows = [r for r in scheduler.for_run(store, run_id) if r.kind == f["kind"]]
         if not any(r.run_at.date().isoformat() == f["date"] for r in rows):
             fail(f"{f['kind']} follow-up", f["date"], [r.run_at.isoformat() for r in rows])
-
-    if expect.get("library_unchanged"):
-        raise NotImplementedError("checking the playbook library needs the playbook store (Week 4 Day 17-19)")
 
     problems += plan_problems(expect.get("plan", {}), of["plan"][-1]["plan"] if "plan" in of else None)
     return problems
@@ -395,6 +409,8 @@ async def run_case(case: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
         graph = GraphClient(tokens, sleep=no_sleep)
         rt = runner.Runtime(store=store, graph=graph, facts=load_client_facts(DOMAIN), domain=DOMAIN, link_key=LINK_KEY,
                             sleep=no_sleep, closeout_model=drafts_model(), clean_sign_ins_for=ids["dennis"])
+        apply_library_setup(rt.library, case.get("setup", {}))
+        library_before = library_state(rt.library)
         try:
             sender = f"{case['from']}@{DOMAIN}"
             run_id = store.create_run(store.create_ticket(case["ticket"], sender).id).id
@@ -407,6 +423,8 @@ async def run_case(case: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
             await graph.aclose()
 
     problems = refused + check(case, case.get("expect", {}), store, run_id, tenant, after_start, plan, ids)
+    if case.get("expect", {}).get("library_unchanged") and (after := library_state(rt.library)) != library_before:
+        problems.append(f"the playbook library changed: {library_before!r} -> {after!r}")
     return problems, summarize(store, run_id)
 
 
@@ -516,7 +534,8 @@ async def test_live(case):
 # ------------------------------------------------------------------ the harness itself
 
 
-WEEK_4_LANDED = {23, 24, 25, 26}  # Week 4 cases whose feature is in (Day 17: the no-playbook path; Day 18: files)
+# Week 4 cases whose feature is in (Day 17: no playbook; Day 18: files; Day 19: learned playbooks)
+WEEK_4_LANDED = {23, 24, 25, 26, 27, 28}
 
 
 def test_cases_cover_tech_md_section_11():

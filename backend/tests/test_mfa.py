@@ -81,7 +81,7 @@ def mfa_run(rt):
         store.set_state(run_id, RunState.PLAN_PROPOSED)
         gate.check(store, run_id, plan, requester_approved=True, intents=list(intents),
                    playbooks=load_playbooks(list(intents), DOMAIN), facts=rt.facts,
-                   autonomy=rt.library.autonomy(), transcript=dennis_transcript())
+                   autonomy=rt.library.autonomy(), unproven=(), transcript=dennis_transcript())
         return run_id
 
     return make
@@ -134,7 +134,7 @@ async def test_delete_under_the_wrong_method_type_fails_verification(store, grap
 def test_credential_steps_on_an_mfa_reset_are_labelled_oob_required(facts):
     result = gate.evaluate(mfa_plan(), requester_approved=True, intents=["mfa.reset"],
                            playbooks=load_playbooks(["mfa.reset"], DOMAIN), facts=facts,
-                           autonomy=facts.autonomy, transcript=dennis_transcript())
+                           autonomy=facts.autonomy, unproven=(), transcript=dennis_transcript())
     by_step = {d.step_id: (d.decision, d.rule_id) for d in result.decisions}
     assert by_step["remove_phone"] == ("approve", "mfa.oob_required")
     assert by_step["tap"] == ("approve", "mfa.oob_required")
@@ -145,7 +145,7 @@ def test_an_onboarding_tap_keeps_its_rule(transcript, playbooks, facts):
     from conftest import plan_with
 
     tap = next(d for d in gate.evaluate(plan_with(), requester_approved=True, intents=["user.onboard"],
-                                        playbooks=playbooks, facts=facts, autonomy=facts.autonomy,
+                                        playbooks=playbooks, facts=facts, autonomy=facts.autonomy, unproven=(),
                                         transcript=transcript).decisions
                if d.step_id == "tap")
     assert (tap.decision, tap.rule_id) == ("approve", "risk.security.credential")

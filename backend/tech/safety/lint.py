@@ -220,10 +220,10 @@ def _ordering_problems(plan: Plan) -> list[str]:
     return problems
 
 
-def _dod_problems(playbook: Playbook, actions: set[str]) -> list[str]:
-    """Rule 4: every required DoD item has a step whose action could satisfy it."""
-    problems: list[str] = []
-    for item in playbook.definition_of_done:
+def dod_unmet(definition_of_done: list[dict[str, Any]], actions: set[str]) -> list[str]:
+    """The required DoD items none of these actions could satisfy (rule 4; also playbook_check)."""
+    unmet: list[str] = []
+    for item in definition_of_done:
         name, args = next(iter(item.items()))
         if name in STRUCTURAL_DOD or name in OPTIONAL_DOD:
             continue
@@ -231,10 +231,15 @@ def _dod_problems(playbook: Playbook, actions: set[str]) -> list[str]:
             continue  # a plain reply is close-out's, not a step's
         producers = DOD_PRODUCERS.get(name)
         if producers and not (producers & actions):
-            makers = " or ".join(sorted(producers))
-            problems.append(f"Nothing in the plan meets the definition of done '{name}'; add a {makers} step, "
-                            f"or list it under needs_technician with a reason.")
-    return problems
+            unmet.append(name)
+    return unmet
+
+
+def _dod_problems(playbook: Playbook, actions: set[str]) -> list[str]:
+    """Rule 4: every required DoD item has a step whose action could satisfy it."""
+    return [f"Nothing in the plan meets the definition of done '{name}'; add a "
+            f"{' or '.join(sorted(DOD_PRODUCERS[name]))} step, or list it under needs_technician with a reason."
+            for name in dod_unmet(playbook.definition_of_done, actions)]
 
 
 def _must_investigate_problems(playbook: Playbook, transcript: Transcript) -> list[str]:
