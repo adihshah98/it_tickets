@@ -33,7 +33,9 @@ class StepBase(BaseModel):
     id: str = Field(pattern=r"^[A-Za-z0-9_-]+$")
     depends_on: list[str] = []
     rationale: str
-    expected: dict[str, Any] = Field(description="What a verify read should show afterwards")
+    expected: dict[str, Any] = Field(description=(
+        "What a verify read should show afterwards, as literal values (e.g. {\"accountEnabled\": false}). "
+        "Leave out what you can't know in advance, such as timestamps"))
     risk_class: RiskClass = Field(description="Your view; the gate recomputes it from the catalogue")
 
 

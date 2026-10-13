@@ -278,3 +278,46 @@ so one sign-in read can use most of it.
      - no trace when the model never asks;
      - no prefetch off an MFA reset, or when the hint matches more than one user;
      - the demo mock is honoured.
+
+### Run 2 (2026-10-13, after the fixes): #7, #11, #20 re-run; 0 of 3 passed, 5 min 55 s
+
+None of them failed on a timeout, and none on the agent's judgement. The gate decisions per action
+matched in all three, and every run ended ESCALATED, so nothing unsafe ran. Each found a different defect:
+
+| Case | Ended | Cause |
+| ---- | ----- | ----- |
+| 7 offboarding | ESCALATED (`execution`) at `revoke` | The model wrote `expected: {signInSessionsValidFromDateTime: "after approval time"}`, which is **prose**. The executor compares `expected` literally, so the verify failed, although the handler's own check passed (sessions revoked at 16:59:11Z). Kevin was disabled and his sessions revoked; the next reset restored him. |
+| 11 MFA reset | ESCALATED (`dod`): `old_methods_removed`, `message_sent` | The `authMethod.delete` verify read `/authentication/methods` and saw the method gone. Seconds later the `old_methods_removed` probe read the same list and **still saw it**: an eventually-consistent read. Unlike the membership probes, this probe doesn't re-read (`ctx.settled`). `message_sent` failed only because the reply is held while a probe fails. |
+| 20 `reports@` | ESCALATED (`timeout`, 90 s) instead of `investigator` | The model had its answer at 7.8 s ("known service account: escalate, never reset"), then waited on `signIns.list` for `reports@`. That read was prefetched at the start, timed out at 60 s, and its retry ran into the 90 s investigation limit. The outcome is safe, with the wrong kind. |
+
+**The changes from earlier, seen live:**
+- **Tool description: worked.** #7's investigation never called `signIns.list`; every read was done by 10.6 s.
+- **Prefetch: not measurable yet.** #11's sign-ins are Dennis's mock (6.8 s, no Graph call). #20's sign-in
+  read never finished.
+- **Timeout fix: worked as designed.** No crashes, but see #20: two 60 s tries don't fit a 90 s budget.
+
+**Tenant afterwards:**
+- Kevin is restored by the resets before #11 and #20.
+- **Dennis's Authenticator was probably deleted by #11:** the step verified, and the probe's stale read
+  doesn't change that. Re-register it before the next MFA demo.
+
+**Fixes after run 2:**
+1. **Prose in `expected` (#7).**
+   - `executor.compare` leaves a key unchecked when the read shows a timestamp and the plan's value isn't
+     one ("after approval time"). The handler's own verify already checked the change.
+   - Anything else still has to match: a real date, or a non-timestamp field written in prose, still fails.
+   - The `expected` field's description, which the model sees, now asks for literal values and says to
+     leave out what can't be known in advance, such as timestamps.
+2. **The stale methods read (#11).** `old_methods_removed` re-reads on the probes' usual settle delays
+   before failing, like the membership probes. FakeTenant gains `stale_method_reads` to exercise it.
+3. **Sign-in reads inside the 90 s budget (#20).**
+   - In an investigation, `signIns.list` is capped at 30 s (`READ_TIMEOUTS_S`), measured from when the
+     model asks. A prefetch started earlier gets that much longer.
+   - Past the cap, the model is told: "treat the sign-in history as unknown, not as clean: without it an
+     account takeover can't be ruled out".
+   - The read isn't counted for must-investigate (lint rule 5). So an MFA reset whose sign-in read never
+     answers can't pass lint with write steps; it can only escalate. That is the safe direction.
+4. **Tests:**
+   - `compare` with an unknowable timestamp, a known one, and prose elsewhere;
+   - the probe waiting out two stale reads;
+   - an investigation carrying on past a capped sign-in read.

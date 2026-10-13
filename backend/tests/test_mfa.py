@@ -248,6 +248,15 @@ async def test_oob_probe_fails_when_confirmation_came_after_a_credential_write(r
     assert not probes["oob_confirmed"].ok and "tap" in probes["oob_confirmed"].detail
 
 
+async def test_old_methods_probe_waits_out_a_stale_read(store, graph, seeded):
+    # live run 2: the delete verified, then the probe's read still listed the method
+    run_id, result = await execute_plan(store, graph, delete_only())
+    assert result.ok
+    seeded.stale_method_reads = 2
+    probes = await dod(store, run_id, graph, delete_only())
+    assert probes["old_methods_removed"].ok and seeded.stale_method_reads == 0
+
+
 async def test_old_methods_probe_fails_while_the_method_is_registered(rt, mfa_run, seeded):
     probes = await dod(rt.store, mfa_run(), rt.graph, mfa_plan())
     assert not probes["old_methods_removed"].ok and PHONE in probes["old_methods_removed"].detail

@@ -337,8 +337,10 @@ async def old_methods_removed(ctx: DodContext, args: dict[str, Any]) -> Probe:
         return Probe("old_methods_removed", True, "the plan removes no methods")
     remaining = []
     for user_id in set(want.values()):
-        have = await auth_method_ids(ctx.graph, user_id)
-        remaining += [mid for mid, uid in want.items() if uid == user_id and mid in have]
+        mine = {mid for mid, uid in want.items() if uid == user_id}
+        # The methods list is eventually consistent: it can show a method again just after the delete verified.
+        have = await ctx.settled(lambda u=user_id: auth_method_ids(ctx.graph, u), lambda ids, m=mine: not m & ids)
+        remaining += sorted(mine & have)
     return Probe("old_methods_removed", not remaining,
                  f"still registered: {', '.join(remaining)}" if remaining else f"removed {len(want)}")
 

@@ -55,6 +55,9 @@ MAX_READS = 25
 TIMEOUT_S = 90.0
 LINT_RETRIES = 2
 SIGN_INS_TOP = 15  # the sign_ins tool's default, so a prefetch matches the usual call
+# Reads that may take longer than an investigation can wait. Graph's sign-in log has taken over 60 s (live run 2):
+# past the cap the model is told the history is unknown, and for a takeover check unknown means escalate.
+READ_TIMEOUTS_S = {"signIns.list": 30.0}
 LIMITS = UsageLimits(request_limit=20, tool_calls_limit=MAX_READS + 25)
 
 SETTINGS = AnthropicModelSettings(
@@ -146,8 +149,15 @@ async def _read(ctx: RunContext[InvestigateDeps], tool: str, **args: Any) -> Any
         return {"error": error}
     prefetched = deps.prefetched.pop((tool, str(args.get("user_id", "")).lower(), args.get("top")), None)
     try:
-        result = await run_read(deps.graph, deps.transcript, tool, clean_sign_ins_for=deps.clean_sign_ins_for,
-                                prefetched=prefetched, **args)
+        async with asyncio.timeout(READ_TIMEOUTS_S.get(tool)):
+            result = await run_read(deps.graph, deps.transcript, tool, clean_sign_ins_for=deps.clean_sign_ins_for,
+                                    prefetched=prefetched, **args)
+    except TimeoutError:
+        error = (f"no answer within {READ_TIMEOUTS_S[tool]:.0f} s (Graph's sign-in log is slow). Treat the sign-in "
+                 "history as unknown, not as clean: without it an account takeover can't be ruled out")
+        deps.transcript.record(tool, args, error=error)
+        deps.recorder.tool_call(tool, args, error=error)
+        return {"error": error}
     except GraphError as exc:  # the model sees the error (e.g. a 404) and can carry on
         error = f"{exc.status} {exc.code}: {exc.message}"
         deps.recorder.tool_call(tool, args, error=error)

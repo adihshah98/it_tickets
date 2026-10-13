@@ -416,3 +416,34 @@ async def test_the_prefetch_honours_the_demo_sign_in_mock(store, run_id, graph, 
 
     [call] = [e.payload for e in store.events(run_id) if e.type == "tool_call"]
     assert call["result"][0]["city"] == "Sacramento" and audit.call_count == 0
+
+
+async def test_a_sign_in_read_past_its_cap_is_unknown_not_clean(store, run_id, graph, facts, monkeypatch):
+    import asyncio
+
+    from tech.agents import investigator
+
+    monkeypatch.setattr(investigator, "READ_TIMEOUTS_S", {"signIns.list": 0.05})
+
+    async def slow(request):
+        await asyncio.sleep(5)
+        return httpx.Response(200, json={"value": []})
+
+    with respx.mock(assert_all_called=False) as router:
+        router.get(f"{GRAPH}/users").mock(return_value=httpx.Response(200, json={"value": [{"id": DENNIS}]}))
+        router.get(f"{GRAPH}/auditLogs/signIns").mock(side_effect=slow)
+        returns = {}
+
+        def respond(messages, info: AgentInfo) -> ModelResponse:
+            returns.update(tool_returns(messages))
+            if len(messages) == 1:
+                return ModelResponse(parts=[ToolCallPart("sign_ins", {"user_id": DENNIS})])
+            return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, MFA_STOP)])
+
+        result = await run_mfa(store, run_id, graph, facts, FunctionModel(respond))
+
+    assert result.plan is not None  # the investigation carried on and finished
+    assert "not as clean" in returns["sign_ins"]["error"]
+    [call] = [e.payload for e in store.events(run_id) if e.type == "tool_call"]
+    assert not call["ok"] and "no answer within" in call["error"]
+    assert not result.transcript.called("signIns.list")  # rule 5 doesn't count a read that never answered

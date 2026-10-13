@@ -47,6 +47,8 @@ class FakeTenant:
         self.calls: list[tuple[str, str, dict | None]] = []
         self._failures: list[list] = []
         self.stale_member_reads = 0  # memberOf reads that don't show new memberships yet (directory lag)
+        self.stale_method_reads = 0  # auth-method reads that still show deleted methods (seen live, Day 16)
+        self.deleted_methods: dict[str, list[dict]] = {}
         self.seat_holder = self.add_user("seat-holder", "Seat Holder")
 
     # ------------------------------------------------------------ setup helpers
@@ -215,7 +217,11 @@ class FakeTenant:
             case "GET", "/authentication/temporaryAccessPassMethods":
                 return httpx.Response(200, json={"value": self.taps.get(uid, [])})
             case "GET", "/authentication/methods":  # every method, TAPs included, like Graph's aggregate list
-                methods = [{k: v for k, v in am.items() if k != "segment"} for am in self.auth_methods.get(uid, [])]
+                registered = self.auth_methods.get(uid, [])
+                if self.stale_method_reads:
+                    self.stale_method_reads -= 1
+                    registered = registered + self.deleted_methods.get(uid, [])
+                methods = [{k: v for k, v in am.items() if k != "segment"} for am in registered]
                 taps = [{"id": t["id"], "@odata.type": "#microsoft.graph.temporaryAccessPassAuthenticationMethod"}
                         for t in self.taps.get(uid, [])]
                 return httpx.Response(200, json={"value": methods + taps})
@@ -225,6 +231,7 @@ class FakeTenant:
                 if match is None or match["segment"] != d.group(1):  # Graph 404s a method under the wrong type
                     return error(404, "authentication method not found", "itemNotFound")
                 registered.remove(match)
+                self.deleted_methods.setdefault(uid, []).append(match)
                 return httpx.Response(204)
             case "POST", "/revokeSignInSessions":
                 user["signInSessionsValidFromDateTime"] = datetime.now(UTC).isoformat()

@@ -23,6 +23,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import logfire
@@ -88,11 +89,25 @@ def resolve(value: Any, outputs: dict[str, dict[str, Any]]) -> Any:
     return outputs[step_id][name]
 
 
+def _timestamp(value: Any) -> bool:
+    if not isinstance(value, str) or "T" not in value:
+        return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
+
+
 def compare(expected: dict[str, Any], observed: dict[str, Any]) -> tuple[list[str], list[str]]:
-    """(mismatches, unchecked keys) between the plan's expected state and what the verify read saw."""
+    """(mismatches, unchecked keys) between the plan's expected state and what the verify read saw.
+
+    A key the read doesn't show is unchecked, and so is a timestamp the plan couldn't have known (it wrote
+    "after approval time" for when sessions were revoked, Build-Day16 live run 2): the handler's own verify
+    already checked that the time moved."""
     mismatches, unchecked = [], []
     for key, want in expected.items():
-        if key not in observed:
+        if key not in observed or (_timestamp(observed[key]) and not _timestamp(want)):
             unchecked.append(key)
         elif not same(want, observed[key]):
             mismatches.append(f"{key}: expected {want!r}, saw {observed[key]!r}")

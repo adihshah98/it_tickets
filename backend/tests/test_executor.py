@@ -192,3 +192,13 @@ def test_the_guard_refuses_a_payload_with_a_secret():
     secrets.watch("hunter2-secret")
     with pytest.raises(SecretLeak):
         secrets.guard({"note": "your code is hunter2-secret"})
+
+
+def test_compare_leaves_a_timestamp_the_plan_couldnt_know_unchecked():
+    # live run 2: the model expected sessions revoked "after approval time"
+    observed = {"signInSessionsValidFromDateTime": "2026-10-13T16:59:11Z"}
+    assert compare({"signInSessionsValidFromDateTime": "after approval time"}, observed) == (
+        [], ["signInSessionsValidFromDateTime"])
+    assert compare({"signInSessionsValidFromDateTime": "2026-10-13T16:59:11Z"}, observed) == ([], [])
+    assert compare({"signInSessionsValidFromDateTime": "2026-10-01T00:00:00Z"}, observed)[0]  # a real date is checked
+    assert compare({"displayName": "after approval time"}, {"displayName": "Priya Nair"})[0]  # prose elsewhere fails
