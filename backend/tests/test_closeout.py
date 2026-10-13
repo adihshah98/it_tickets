@@ -19,6 +19,7 @@ from tech.core.models import Plan
 from tech.core.store import RunState
 from tech.execution import dod, links
 from tech.playbooks import load_playbook
+from tech.safety.scanner import scan
 
 REQUESTER = {"name": "Taylor", "email": TAYLOR}
 
@@ -196,6 +197,18 @@ def test_the_no_playbook_dod_is_a_probe_per_action_that_has_one_then_the_reply()
         step("rename", "user.update", {"userId": MARCUS, "jobTitle": "Lead"}, "write.reversible")]})
     assert no_playbook_dod(plan).definition_of_done == [{"message_sent": {"to": "$requester"}}]
     assert no_playbook_dod(plan.model_copy(update={"steps": []})) is None
+
+
+async def test_file_ids_never_reach_the_model(rt, restore_gated, tenant):
+    """A drive ID (b!…) reads as TAP-like to the scanner, and blocked the live run's PSA note (Build-Day18)."""
+    run_id, plan, item = restore_gated()
+    await runner.approve(rt, run_id, by=TAYLOR)
+    context = build_context(rt.store, run_id, plan, [], requester=REQUESTER, playbook=None)
+    [done] = context["steps_done"]
+    assert done["params"] == {"versionId": "2.0", "fileName": "Q3 Parking Rates.xlsx"}
+    text = json.dumps(context)
+    assert item not in text and tenant.files[item]["drive"] not in text
+    assert not scan(text)
 
 
 async def test_the_context_carries_the_note_for_each_action_done(rt, restore_gated):

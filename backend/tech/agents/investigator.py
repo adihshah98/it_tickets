@@ -116,8 +116,11 @@ Then do one of these:
   change that would fix it but that you can't propose, if there is one).
 Credentials (TAPs, MFA methods), licenses, access to someone's data, blocking sign-in and deleting anything
 always need a reviewed playbook: escalate those, never plan them.
-If a detail you need is ambiguous (which user, which file, which version), ask in questions_for_requester
-and plan no changes.
+If a detail you need is uncertain (which user, which file, which version):
+- When the evidence points to one likely answer, plan it and put your doubt in confirm_on_approval
+  (question, proposed, evidence). A person approves every change here and decides before anything runs.
+- Only when no answer is more likely than another (several candidates fit equally), ask in
+  questions_for_requester and plan no changes.
 """
 
 

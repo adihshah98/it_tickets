@@ -548,3 +548,13 @@ async def test_a_playbook_run_gets_no_generic_guideline(store, run_id, graph, fa
     await run(store, run_id, graph, facts, FunctionModel(respond))
     assert "No playbook covers this ticket" not in seen[0] and "At most 25 reads" in seen[0]
     assert store.last_event(run_id, "plan").payload["no_playbook"] is False
+
+
+def test_without_a_playbook_a_likely_answer_goes_to_the_approver_not_back_to_the_requester():
+    """Build-Day18 live runs: asking the requester about every doubt stalled restores that had one likely
+    version. A doubt with a likely answer goes on the approval card; only a true tie is asked."""
+    from tech.agents.investigator import NO_PLAYBOOK_GUIDELINE
+
+    likely, tie = NO_PLAYBOOK_GUIDELINE.split("Only when no answer is more likely")
+    assert "plan it and put your doubt in confirm_on_approval" in likely
+    assert "questions_for_requester and plan no changes" in tie

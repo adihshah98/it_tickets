@@ -15,7 +15,7 @@ Each part ends with green tests and a commit, then a stop for review.
 | 0 | Live spike: search lag and what a restore does to the file (read-mostly) | None | **Done** |
 | 1 | `file.restoreVersion` four-touch + FakeTenant drives + file-ID grounding; #24 | New action; shipped intents unchanged | **Done** |
 | 2 | No-playbook close-out: DoD, reply note, `can_save_playbook`; #23 | Close-out for no-playbook runs only | **Done** |
-| 3 | Live: reset, Sophie via the CLI, `test_live_file_restore.py` | None (proof) | Planned |
+| 3 | Live: reset, Sophie via the CLI, `test_live_file_restore.py` | Three fixes found live (below) | **Done** |
 
 **Needs your approval:** Part 0's one test restore on the tenant, and all of Part 3 (tenant reset, live model
 runs). Both are flagged where they come up.
@@ -312,6 +312,101 @@ three shipped intents' gate decisions are unchanged. `ruff` is clean.
 
 ## Part 3: live (needs approval: tenant writes and model spend)
 
+**What happened (2026-10-13):**
+
+- **Reset done.** `--files base` (20:58) then `--files overwrite` (20:59). All three files have
+  `1.0`/`2.0`/`3.0`, including `Staffing Plan.xlsx`, which was uploaded for the first time. Stored sizes:
+  Q3 12,717 / 12,760 / 12,608. Reset also warned that Dennis has no Authenticator; that is the MFA demo's
+  concern, not today's.
+- **Search lag is not a problem.** Polled `root/search` from about 45 s after the overwrite: Q3 and
+  Lot Permits were found on the first poll, and Staffing Plan (a brand-new file created at 20:59:07)
+  6 s later, about 80 s after creation. The search hit's `lastModifiedDateTime` showed `2.0`'s time
+  rather than the overwrite's, so search metadata trails. The model reads times from `files.versions`
+  anyway.
+- **Sophie's run 19 crashed in the investigation.**
+  - SharePoint throttled `root/search` (429) with `Retry-After: 30,120`, two values. Probably my lag
+    polling plus the run's 6-site fan-out.
+  - `GraphClient.request` does `float(resp.headers["Retry-After"])` and raised `ValueError`, which killed
+    the CLI process.
+  - Run 19 is left in `INVESTIGATING`. Nothing was written to the tenant.
+  - Throttling had cleared a minute later (search → 200).
+- **Intake triaged the ticket as `unknown`,** not a new slug such as `file.restore_version`. Both
+  are no-playbook, so today is unaffected. But "Save as playbook" (Day 19) needs a real intent to save
+  under, and #23 records `file.restore_version`.
+
+**Decisions taken:**
+
+- **`Retry-After`:** use its first number, and fall back to backoff if it isn't a number
+  (`client.retry_after`, tests for `"30,120"`, `"30, 120"`, `"soon"` and `""`).
+- **Intake's `unknown`:** left for Day 19. "Save as playbook" proposes the slug (the plan's intent was
+  `file.restore_version`) and the technician confirms it.
+
+**Run 20 (CLI, after the fix): DONE.**
+
+- Intake said `unknown`. The investigator named the plan's intent `file.restore_version` itself.
+- Reads: users.search → files.search (1 hit; the index had caught up) → files.versions → users.memberOf.
+  Lint passed on the first attempt, in 30 s.
+- Plan: restore `2.0`, one step, gated `approve` (`no_playbook.approve`). It put its doubt in
+  `confirm_on_approval`: all versions are by "SharePoint App", and 20:59 UTC isn't "this morning".
+  Its `expected` keys (`latestVersionSize`, `versionCount`) aren't ones verify reports, so they were
+  unchecked. The handler's own check decides.
+- After approval: the restore verified in 1.1 s; `version_restored` ✔ ("Q3 Parking Rates.xlsx is version
+  2.0 again (now 4.0)"); the reply was sent with the "nothing is lost" note; `message_sent` ✔; a 1-minute
+  time entry; the CLI printed the save-as-playbook line.
+- **SharePoint:** `4.0` is 12,760 bytes, SHA-256 `d3033bedf913…`, identical to `2.0`. `3.0` (the overwrite)
+  is still in the history.
+- **Defect: the PSA note was blocked `tap_like`.** Sonnet copied the drive ID (`b!H-i7…`) from the context
+  into it. Fixed by keeping file IDs out of the close-out context (`CONTEXT_EXCLUDED`: tap, driveId,
+  itemId), plus a test that the context scans clean.
+
+**`test_live_file_restore.py`:** two attempts after re-staging, neither reached approval. Nothing was
+written.
+
+1. "…saved over it this morning…" → `ESCALATED` (questions). All versions were staged at 21:12 UTC, which
+   isn't morning in the US, so Opus asked Sophie which version she meant. The test wording was changed
+   to drop the time of day.
+2. No time of day → `ESCALATED` (timeout at 60 s). The findings say "all saved by SharePoint App
+   within 40 s today, can't tell which save was Sophie's".
+
+The cause is the staged data, not the code: each version is a few seconds apart and authored by the app,
+which a careful investigator rightly finds suspicious. It's also near the 60 s no-playbook bound (run 20
+took 30 s). (Attempt 2 was a re-run I made only to read the failure; I should have captured the first
+run's output. That cost one extra Opus run.)
+
+**Decision: prefer confirm-on-approval.** The no-playbook guideline's ambiguity rule now says: when the
+evidence points to one likely answer, plan it and put the doubt in `confirm_on_approval`, because a person
+approves every no-playbook change anyway. Ask the requester, and plan nothing, only when no answer is more
+likely than another. That is what run 20 did. A test pins the two branches. The timeout stays at 60 s.
+
+**Attempt 3, after the change: passed** (37 s end to end).
+
+- Restore planned and gated `approve`; one approval; DONE.
+- `version_restored` ✔ and `message_sent` ✔.
+- **Both** the reply and the PSA note were sent, so the file-ID fix holds live.
+- SharePoint has a new version identical to the chosen one.
+
+**Three fixes from the live runs, each with tests:**
+
+1. `GraphClient` uses the first number of a multi-value `Retry-After` (crashed run 19).
+2. The close-out context leaves out `driveId`/`itemId` (the PSA note was blocked as TAP-like).
+3. The no-playbook guideline sends a doubt that has a likely answer to the approver, not back to the
+   requester (one question and one timeout in three runs).
+
+**Left over:**
+
+- Run 19 is still `INVESTIGATING` in `data/tech.db` (the crash). The CLI has no crash guard; the API does.
+  It's harmless, and Day 22's reset clears runs.
+- **Grace's #24 hasn't been run live since the guideline change.** "The earlier version from today" with
+  several same-day versions should still be a tie, and so a question. Worth a live run (with a re-stage)
+  before Day 21's Grace phrasings.
+- The investigator writes `expected` keys that verify doesn't report (`latestVersionSize`). They're
+  unchecked, not wrong. If it matters, the params description can name `currentMatches`.
+- **For the demo (Day 22):**
+  - run `--files base` the evening before, so "yesterday afternoon" and "this morning" match the
+    history;
+  - every version will still be authored by "SharePoint App". Run 20 showed that ends up on the
+    approval card, which is fine to show.
+
 1. `uv run tenant/reset.py --files base`, then `--files overwrite`. This deletes and re-uploads the
    team-site files (now three of them).
 2. Check `files.search` finds all three files. If not, confirm the fallback finds them.
@@ -326,6 +421,13 @@ Cost: one Opus investigation and one Sonnet close-out per run, about the same as
 recorded in this doc.
 
 ## Verification
+
+**Result:** met.
+
+- `uv run pytest`: 404 passed, 2 xfailed (#27, #28 → Day 19).
+- `ruff check backend` is clean.
+- Live: run 20 via the CLI reached DONE, with SharePoint showing `4.0` identical to `2.0`.
+  `test_live_file_restore.py` passed once (attempt 3).
 
 - `uv run pytest` and `uv run ruff check backend` are green. #23 and #24 pass; #27 and #28 still xfail for
   their stated reasons.

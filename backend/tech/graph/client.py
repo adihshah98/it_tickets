@@ -1,7 +1,8 @@
 """Async Microsoft Graph client (port of tenant/graph.py).
 
 Retry policy is Tech.MD §4.6, owned by code, never the model:
-  - 429: honour Retry-After (up to 6 tries).
+  - 429: honour Retry-After (up to 6 tries). SharePoint can send two values ("30,120", Build-Day18): the
+    first is used, and a value that isn't a number falls back to exponential backoff.
   - 500/502/503/504: 3 tries.
   - Replication lag (404, or 400 "...does not exist..." on an object we just created):
     only when the caller passes retry_replication=True; 5 tries, backoff over about a minute.
@@ -67,6 +68,14 @@ def odata_str(value: str) -> str:
     return value.replace("'", "''")
 
 
+def retry_after(resp: httpx.Response, default: float) -> float:
+    """Seconds to wait from a 429's Retry-After: its first number, or `default` if there's none."""
+    try:
+        return float(resp.headers.get("Retry-After", "").split(",")[0])
+    except ValueError:
+        return default
+
+
 def is_replication_lag(resp: httpx.Response) -> bool:
     if resp.status_code == 404:
         return True
@@ -124,7 +133,7 @@ class GraphClient:
                 raise GraphTransportError(method, url, exc) from exc
             if resp.status_code == 429 and throttled < THROTTLE_TRIES - 1:
                 throttled += 1
-                await self._wait("throttled", float(resp.headers.get("Retry-After", 2**throttled)))
+                await self._wait("throttled", retry_after(resp, 2.0**throttled))
                 continue
             if resp.status_code in (500, 502, 503, 504) and server_errors < SERVER_ERROR_TRIES - 1:
                 server_errors += 1

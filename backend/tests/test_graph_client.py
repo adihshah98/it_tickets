@@ -51,6 +51,16 @@ async def test_429_honours_retry_after(client, sleeps):
 
 
 @respx.mock
+@pytest.mark.parametrize(("header", "wait"), [("30,120", 30.0), ("30, 120", 30.0), ("soon", 2.0), ("", 2.0)])
+async def test_429_with_an_odd_retry_after_waits_instead_of_crashing(client, sleeps, header, wait):
+    """SharePoint search sent "Retry-After: 30,120" (Build-Day18 live run); the first number is used."""
+    respx.get(f"{GRAPH}/users").mock(side_effect=[err(429, headers={"Retry-After": header}),
+                                                  httpx.Response(200, json={})])
+    assert await client.get("/users") == {}
+    assert sleeps == [wait]
+
+
+@respx.mock
 async def test_5xx_gives_up_after_three_tries(client, sleeps):
     route = respx.get(f"{GRAPH}/users").mock(return_value=err(503))
     with pytest.raises(GraphError) as exc:

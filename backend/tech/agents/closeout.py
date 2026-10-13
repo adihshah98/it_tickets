@@ -29,6 +29,10 @@ from tech.playbooks import Playbook
 MODEL = "anthropic:claude-sonnet-5-5"
 TIMEOUT_S = 45.0
 LINK_PLACEHOLDER = "{{link}}"
+# Params the model never sees: a TAP reference, and SharePoint's drive and item IDs, which the secret scanner
+# reads as TAP-like (mixed case, digits, symbols) and so blocked the PSA note they were copied into (Build-Day18
+# live run). The file's name and the version stay; the IDs are in the run's events.
+CONTEXT_EXCLUDED = {"tap", "driveId", "itemId"}
 # What the requester should hear whenever a step of this action was done, playbook or not.
 REPLY_NOTES = {
     "file.restoreVersion": "Restoring a version creates a new version of the file; nothing is lost. The "
@@ -75,8 +79,7 @@ def build_context(store: Store, run_id: int, plan: Plan, probes: list[Probe], *,
     done = []
     for step in plan.steps:
         if step.id in verified:
-            params = step.params.model_dump(mode="json", by_alias=True, exclude_none=True)
-            params.pop("tap", None)
+            params = step.params.model_dump(mode="json", by_alias=True, exclude=CONTEXT_EXCLUDED, exclude_none=True)
             done.append({"action": step.action, "params": params, "skipped": verified[step.id].get("skipped")})
     new_user = next((v.get("output") for v in verified.values() if v["action"] == "user.create"), None)
     link = next((row for row in links.for_run(store, run_id) if row.to.casefold() == requester["email"].casefold()),
