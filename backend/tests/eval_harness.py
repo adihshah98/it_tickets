@@ -275,7 +275,8 @@ def check(case: dict[str, Any], expect: dict[str, Any], store: Store, run_id: in
         triage = of["triage"][-1]["triage"]
         result = gate.evaluate(Plan.model_validate(plan), requester_approved=of["triage"][-1]["requester_approved"],
                                intents=triage["intents"], playbooks=load_playbooks(triage["intents"], DOMAIN),
-                               facts=load_client_facts(DOMAIN), transcript=transcript_of(events))
+                               facts=(facts := load_client_facts(DOMAIN)), autonomy=facts.autonomy,
+                               transcript=transcript_of(events))
         got = {d.step_id: d.model_dump() for d in result.decisions}
         for sid, w in want.items():
             if sid not in got or decision_text(got[sid], w) != w:

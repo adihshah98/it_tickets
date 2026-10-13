@@ -4,8 +4,9 @@ Every state transition and every thing the UI shows is an event. The same events
 audit trail and, later, the replay log. Events are numbered per run (seq 1, 2, 3...) so a
 client can resume a stream from the last seq it saw.
 
-Links (one-time credential links) and follow-ups (scheduled work) have their own tables; their
-modules (execution/links.py, execution/scheduler.py) own the logic.
+Links (one-time credential links), follow-ups (scheduled work), playbook versions and per-client
+autonomy overrides have their own tables; their modules (execution/links.py, execution/scheduler.py,
+playbooks/library.py) own the logic.
 """
 
 from __future__ import annotations
@@ -112,6 +113,33 @@ class Followup(SQLModel, table=True):
     status: str = "scheduled"  # scheduled | done | failed
     created_at: datetime = Field(default_factory=utcnow)
     done_at: datetime | None = None
+
+
+class PlaybookVersion(SQLModel, table=True):
+    """One version of one playbook. Shipped and learned playbooks are the same thing: the newest approved
+    version of an intent is the one runs use. `yaml` is the text the investigator sees, comments included."""
+
+    __table_args__ = (UniqueConstraint("intent", "version"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    intent: str = Field(index=True)
+    version: int
+    yaml: str
+    content_hash: str
+    status: str = "approved"  # draft | approved | retired
+    source: str = "shipped"  # shipped | agent_run | technician_run | written | audit_log
+    source_run_id: int | None = None
+    approved_by: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class ClientAutonomy(SQLModel, table=True):
+    """A per-intent autonomy level set in the product, overriding client_facts.autonomy."""
+
+    intent: str = Field(primary_key=True)
+    level: str  # A1 | A2 | A3
+    set_by: str | None = None
+    updated_at: datetime = Field(default_factory=utcnow)
 
 
 class EventBus:

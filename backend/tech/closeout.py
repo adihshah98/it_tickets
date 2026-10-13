@@ -30,7 +30,7 @@ from tech.core.store import RunState, Store, utcnow
 from tech.execution import dod, links
 from tech.graph.client import GraphClient
 from tech.graph.writes import Secrets
-from tech.playbooks import ClientFacts, Playbook, load_playbooks
+from tech.playbooks import ClientFacts, Playbook, PlaybookLibrary
 from tech.safety.scanner import scan
 
 WORK_TYPE = "AI Automation"
@@ -83,13 +83,13 @@ def dod_playbook(playbooks: dict[str, Playbook]) -> Playbook | None:
     return first.model_copy(update={"definition_of_done": list(items.values())})
 
 
-async def close_out(store: Store, graph: GraphClient, run_id: int, plan: Plan, *, facts: ClientFacts, domain: str,
-                    secrets: Secrets, model: Any = CLOSEOUT_MODEL,
+async def close_out(store: Store, graph: GraphClient, run_id: int, plan: Plan, *, facts: ClientFacts,
+                    library: PlaybookLibrary, secrets: Secrets, model: Any = CLOSEOUT_MODEL,
                     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> list[str]:
     """Run the close-out for an executed run (state CLOSING). Returns the names of failed DoD probes."""
     triage = store.last_event(run_id, "triage").payload["triage"]
     requester = {"name": triage["requester"]["name"], "email": triage["requester"]["email"]}
-    playbook = dod_playbook(load_playbooks(list(dict.fromkeys([plan.intent, *triage["intents"]])), domain))
+    playbook = dod_playbook(library.for_intents([plan.intent, *triage["intents"]]))
     ctx = dod.DodContext(store, graph, run_id, plan, facts, requester["email"], sleep=sleep)
 
     probes = await dod.check(ctx, playbook, exclude=("message_sent",)) if playbook else []

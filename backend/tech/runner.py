@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 
@@ -40,7 +40,7 @@ from tech.execution.catalogue import ACTIONS, FOLLOWUP_ACTIONS
 from tech.execution.executor import Execution
 from tech.graph.client import GraphClient, graph_from_settings
 from tech.graph.writes import SecretLeak
-from tech.playbooks import ClientFacts, load_client_facts
+from tech.playbooks import ClientFacts, PlaybookLibrary, load_client_facts
 from tech.safety import gate
 
 S = RunState
@@ -70,7 +70,8 @@ class RunError(RuntimeError):
 
 @dataclass
 class Runtime:
-    """What runs need from outside: the store, the tenant and the client's facts."""
+    """What runs need from outside: the store, the tenant, the client's facts and the playbook library.
+    The library is built over the store, with the shipped playbooks synced in."""
 
     store: Store
     graph: GraphClient
@@ -80,6 +81,11 @@ class Runtime:
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     closeout_model: Any = CLOSEOUT_MODEL
     clean_sign_ins_for: str | None = None  # MFA demo only: settings.mfa_demo_clean_user
+    library: PlaybookLibrary = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.library = PlaybookLibrary(self.store, self.domain, self.facts)
+        self.library.sync_shipped()
 
     @classmethod
     def from_settings(cls, settings: Settings, *, environment: str) -> Runtime:
@@ -203,15 +209,16 @@ def apply_answers(plan: Plan, answers: dict[str, str], domain: str) -> Plan:
 async def start(rt: Runtime, run_id: int, text: str, from_address: str, *,
                 intake_model: Any = INTAKE_MODEL, investigator_model: Any = INVESTIGATOR_MODEL) -> RunState:
     """Triage, investigate and gate a new run; execute straight away if nothing needs approval."""
-    triage, check = await run_intake(rt.store, run_id, text, from_address, rt.facts, model=intake_model)
+    triage, check = await run_intake(rt.store, run_id, text, from_address, rt.facts, library=rt.library,
+                                     model=intake_model)
     result = await investigate(rt.store, run_id, text, triage, requester_approved=check.approved, graph=rt.graph,
-                               facts=rt.facts, domain=rt.domain, model=investigator_model,
+                               facts=rt.facts, domain=rt.domain, library=rt.library, model=investigator_model,
                                clean_sign_ins_for=rt.clean_sign_ins_for)
     if result.outcome == "planned":
         plan = result.plan
         gate.check(rt.store, run_id, plan, requester_approved=check.approved, intents=triage.intents,
-                   playbooks=result.playbooks, facts=rt.facts, transcript=result.transcript,
-                   findings=result.findings)
+                   playbooks=result.playbooks, facts=rt.facts, autonomy=rt.library.autonomy(),
+                   transcript=result.transcript, findings=result.findings)
         if not plan.steps and plan.questions_for_requester and rt.store.get_run(run_id).state in (S.PLAN_CHECKED,
                                                                                                   S.HELD):
             # Nothing can be done before the requester answers (e.g. "rehire?"). There is no waiting-on-
@@ -303,7 +310,7 @@ async def execute(rt: Runtime, run_id: int, plan: Plan) -> None:
         return
     if result.ok:
         transition(rt.store, run_id, S.CLOSING)
-        failed = await closeout.close_out(rt.store, rt.graph, run_id, plan, facts=rt.facts, domain=rt.domain,
+        failed = await closeout.close_out(rt.store, rt.graph, run_id, plan, facts=rt.facts, library=rt.library,
                                           secrets=execution.secrets, model=rt.closeout_model, sleep=rt.sleep)
         if failed:
             transition(rt.store, run_id, S.ESCALATED, kind="dod",

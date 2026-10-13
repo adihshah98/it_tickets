@@ -14,7 +14,7 @@ from pydantic_ai.models import Model
 
 from tech.core.models import Triage
 from tech.core.store import RunState, Store
-from tech.playbooks import ClientFacts, intents
+from tech.playbooks import ClientFacts, PlaybookLibrary
 
 MODEL = "anthropic:claude-haiku-4-5-20251001"
 
@@ -56,12 +56,12 @@ def build_intake(model: Model | str = MODEL) -> Agent[None, Triage]:
 
 
 async def run_intake(
-    store: Store, run_id: int, text: str, from_address: str, facts: ClientFacts, *,
+    store: Store, run_id: int, text: str, from_address: str, facts: ClientFacts, *, library: PlaybookLibrary,
     model: Model | str = MODEL, today: date | None = None,
 ) -> tuple[Triage, RequesterCheck]:
     """Triage the ticket, record a `triage` event and move the run to TRIAGED."""
     agent = build_intake(model)
-    instructions = INSTRUCTIONS.format(playbooks=", ".join(intents()), today=today or date.today())
+    instructions = INSTRUCTIONS.format(playbooks=", ".join(library.intents()), today=today or date.today())
     prompt = f"<ticket>\nFrom: {from_address}\n\n{text}\n</ticket>"
     result = await agent.run(prompt, instructions=instructions)
     triage = result.output

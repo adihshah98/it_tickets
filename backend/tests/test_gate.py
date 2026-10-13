@@ -10,7 +10,7 @@ from tech.safety import gate
 
 def evaluate(plan, transcript, playbooks, facts, *, approved=True, intents=("user.onboard",)):
     return gate.evaluate(plan, requester_approved=approved, intents=intents, playbooks=playbooks, facts=facts,
-                         transcript=transcript)
+                         autonomy=facts.autonomy, transcript=transcript)
 
 
 def decisions(result) -> dict[str, tuple[str, str]]:
@@ -159,7 +159,8 @@ def new_run(store) -> int:
 
 def check(store, run_id, plan, transcript, playbooks, facts, approved=True):
     return gate.check(store, run_id, plan, requester_approved=approved, intents=["user.onboard"],
-                      playbooks=playbooks, facts=facts, transcript=transcript, findings=["Marcus is the peer"])
+                      playbooks=playbooks, facts=facts, autonomy=facts.autonomy, transcript=transcript,
+                      findings=["Marcus is the peer"])
 
 
 def last_state(store, run_id) -> dict:

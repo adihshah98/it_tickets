@@ -7,7 +7,7 @@ import pytest
 
 from tech.core.models import Plan
 from tech.graph.reads import Transcript
-from tech.playbooks import load_client_facts, load_playbooks
+from tech.playbooks import PlaybookLibrary, load_client_facts, load_playbooks
 
 
 def drafts_model(reply: str = "Hi Taylor, Priya is set up. Sign-in link: {{link}}. Use the Outlook mobile app.",
@@ -119,6 +119,13 @@ def playbooks():
     return load_playbooks(["user.onboard"], DOMAIN)
 
 
+def shipped_library(store, facts, domain: str = DOMAIN) -> PlaybookLibrary:
+    """The library a fresh Runtime has: the store with the shipped playbooks synced in."""
+    library = PlaybookLibrary(store, domain, facts)
+    library.sync_shipped()
+    return library
+
+
 # ------------------------------------------------------------------ execution: a fake tenant behind respx
 
 LINK_KEY = "oZ52dGBlFpEMoBqyaDWCIMI_ZhKuu6Tj2RCvSlfPIHE="  # a fixed Fernet key for tests
@@ -203,7 +210,7 @@ def gated(rt, playbooks):
         store.append_event(run_id, "plan", {"plan": plan.model_dump(mode="json", by_alias=True), "usage": {}})
         store.set_state(run_id, RunState.PLAN_PROPOSED)
         gate.check(store, run_id, plan, requester_approved=approved, intents=["user.onboard"], playbooks=playbooks,
-                   facts=rt.facts, transcript=marcus_transcript())
+                   facts=rt.facts, autonomy=rt.library.autonomy(), transcript=marcus_transcript())
         return run_id
 
     return make

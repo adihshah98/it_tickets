@@ -1,7 +1,10 @@
-"""Load the client facts and playbooks (Tech.MD §6).
+"""Parse the client facts and playbooks (Tech.MD §6).
 
-Each YAML file is used two ways: parsed into a model for code (lint, gate, close-out), and passed
+Each playbook's YAML is used two ways: parsed into a model for code (lint, gate, close-out), and passed
 verbatim, comments included, to the investigator, because the comments carry the reasoning.
+
+Runs read playbooks from the store, through `PlaybookLibrary` (library.py). The files here only seed
+the shipped versions; the file-reading functions below are for that seeding and for tests.
 """
 
 from __future__ import annotations
@@ -65,7 +68,12 @@ def _text(name: str, domain: str) -> str:
     return (HERE / name).read_text().replace("{domain}", domain)
 
 
+def client_facts_text(domain: str) -> str:
+    return _text(CLIENT_FACTS, domain)
+
+
 def intents() -> list[str]:
+    """The shipped playbooks' intents (the files here, not the store)."""
     return sorted(p.stem for p in HERE.glob("*.yaml") if p.name != CLIENT_FACTS)
 
 
@@ -73,13 +81,18 @@ def load_client_facts(domain: str) -> ClientFacts:
     return ClientFacts.model_validate(yaml.safe_load(_text(CLIENT_FACTS, domain)))
 
 
+def parse_playbook(text: str, intent: str) -> Playbook:
+    """A playbook's YAML text -> Playbook, checking it declares the intent it is stored under."""
+    playbook = Playbook.model_validate(yaml.safe_load(text))
+    if playbook.intent != intent:
+        raise ValueError(f"the {intent} playbook declares intent {playbook.intent!r}")
+    return playbook
+
+
 def load_playbook(intent: str, domain: str) -> Playbook:
     if intent not in intents():
         raise KeyError(f"no playbook for {intent!r}")
-    playbook = Playbook.model_validate(yaml.safe_load(_text(f"{intent}.yaml", domain)))
-    if playbook.intent != intent:
-        raise ValueError(f"{intent}.yaml declares intent {playbook.intent!r}")
-    return playbook
+    return parse_playbook(_text(f"{intent}.yaml", domain), intent)
 
 
 def load_playbooks(for_intents: list[str], domain: str) -> dict[str, Playbook]:
@@ -89,6 +102,6 @@ def load_playbooks(for_intents: list[str], domain: str) -> dict[str, Playbook]:
 
 def prompt_text(for_intents: list[str], domain: str) -> str:
     """Client facts plus the playbooks for the triaged intents, as YAML, for the investigator's instructions."""
-    parts = [_text(CLIENT_FACTS, domain)]
+    parts = [client_facts_text(domain)]
     parts += [_text(f"{i}.yaml", domain) for i in for_intents if i in intents()]
     return "\n---\n".join(parts)

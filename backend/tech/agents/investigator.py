@@ -47,7 +47,7 @@ from tech.core.store import RunState, Store
 from tech.graph.client import GraphClient, GraphError
 from tech.graph.reads import Transcript, fetch, run_read
 from tech.graph.reads import users_search as search_users
-from tech.playbooks import ClientFacts, Playbook, load_playbooks, prompt_text
+from tech.playbooks import ClientFacts, Playbook, PlaybookLibrary
 from tech.safety.lint import lint
 
 MODEL = "anthropic:claude-opus-5-5"
@@ -330,7 +330,7 @@ def ticket_prompt(text: str, triage: Triage, requester_approved: bool) -> str:
 
 async def investigate(
     store: Store, run_id: int, text: str, triage: Triage, *, requester_approved: bool,
-    graph: GraphClient, facts: ClientFacts, domain: str,
+    graph: GraphClient, facts: ClientFacts, domain: str, library: PlaybookLibrary,
     model: Model | str = MODEL, today: date | None = None,
     limits: UsageLimits = LIMITS, timeout_s: float = TIMEOUT_S, max_reads: int = MAX_READS,
     clean_sign_ins_for: str | None = None,
@@ -338,11 +338,11 @@ async def investigate(
     """INVESTIGATING -> PLAN_PROPOSED with a `plan` event, or -> ESCALATED with the findings so far."""
     store.set_state(run_id, RunState.INVESTIGATING)
     deps = InvestigateDeps(graph=graph, facts=facts, recorder=Recorder(store, run_id), max_reads=max_reads,
-                           playbooks=load_playbooks(list(triage.intents), domain),
+                           playbooks=library.for_intents(triage.intents),
                            clean_sign_ins_for=clean_sign_ins_for)
     instructions = INSTRUCTIONS.format(
         max_reads=max_reads, today=today or date.today(), domain=domain,
-        playbooks=prompt_text(list(triage.intents), domain),
+        playbooks=library.prompt_text(triage.intents),
     )
     agent = build_investigator(model)
     await prefetch_sign_ins(deps, graph, triage)

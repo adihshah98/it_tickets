@@ -5,6 +5,7 @@ from datetime import date
 import httpx
 import pytest
 import respx
+from conftest import shipped_library
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -88,7 +89,8 @@ def tool_returns(messages: list[ModelMessage]) -> dict[str, object]:
 
 async def run(store, run_id, graph, facts, model, **kw):
     return await investigate(store, run_id, TICKET, triage(), requester_approved=True, graph=graph, facts=facts,
-                             domain=DOMAIN, model=model, today=date(2026, 10, 9), **kw)
+                             domain=DOMAIN, library=shipped_library(store, facts), model=model,
+                             today=date(2026, 10, 9), **kw)
 
 
 def states(store, run_id) -> list[str]:
@@ -229,7 +231,8 @@ async def test_investigator_escalation_is_escalated(store, run_id, graph, facts)
 async def test_intake_takes_the_requester_from_the_sender_not_the_body(store, run_id, facts):
     spoofed = triage(email=TAYLOR).model_dump(mode="json")
     model = TestModel(custom_output_args=spoofed)
-    result, check = await run_intake(store, run_id, TICKET, f"JLee@{DOMAIN}", facts, model=model)
+    result, check = await run_intake(store, run_id, TICKET, f"JLee@{DOMAIN}", facts,
+                                       library=shipped_library(store, facts), model=model)
 
     assert result.requester.email == f"jlee@{DOMAIN}".lower()
     assert not check.approved and check.scopes == {"user.onboard": False}
@@ -354,8 +357,8 @@ def mfa_triage(hint: str | None = "Dennis") -> Triage:
 
 async def run_mfa(store, run_id, graph, facts, model, triage_=None, **kw):
     return await investigate(store, run_id, "lost my phone, reset my MFA", triage_ or mfa_triage(),
-                             requester_approved=True, graph=graph, facts=facts, domain=DOMAIN, model=model,
-                             today=date(2026, 10, 12), **kw)
+                             requester_approved=True, graph=graph, facts=facts, domain=DOMAIN,
+                             library=shipped_library(store, facts), model=model, today=date(2026, 10, 12), **kw)
 
 
 @respx.mock
