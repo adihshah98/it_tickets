@@ -13,7 +13,7 @@ The day has four parts. Each part ends with green tests and a commit, then a sto
 | ---- | ---- | --------------------- | ------ |
 | 1 | Offline tier: FakeTenant reads, harness, all 28 cases | No (tests only) | **Done** |
 | 2 | Fix the three gaps the cases found (D1-D3) | **Yes**: lint, runner, close-out | **Done** (D1-D3 as recommended) |
-| 3 | Seed gap: a disabled former employee for #3 | Seed script only | Planned |
+| 3 | Seed gap: a disabled former employee for #3 | Seed script only | **Done**, seeded on the tenant |
 | 4 | Live tier, run once, results recorded here | No, but **costs money and writes to the tenant** | Needs approval to run |
 
 ---
@@ -144,6 +144,13 @@ and DoD do the right thing. The model's judgement is the live tier's job.
     legacy-format address there could sway the format the investigator proposes for Priya in the live demo.
   - She is in `PEOPLE`, so `reset.py` keeps her.
 - Run `uv run tenant/seed.py` once. It is idempotent, but it **writes to the tenant**, so I'll ask first.
+
+**Result (part 3, 2026-10-13):**
+- `Person` has `enabled` (default True). `seed.run` passes it to `ensure_user`, so seed and reset both keep
+  Nina disabled. A disabled person gets no trial seat.
+- Seeded: `nina.alvarez@` was created, disabled, unlicensed, with Marcus as manager (checked with Graph).
+- `reset.py --dry-run` leaves her alone: she is on the roster, so she isn't deleted, and the re-seed
+  keeps her disabled.
 
 ---
 

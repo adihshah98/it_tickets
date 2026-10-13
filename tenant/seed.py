@@ -38,6 +38,7 @@ class Person:
     dept: str
     license: str | None = None  # "primary" (Marcus's license) or "p1" (Entra ID P1), else unlicensed
     manager: str | None = None
+    enabled: bool = True  # False: a former employee; seed and reset keep the account disabled
 
 
 # Mixed email formats on purpose: legacy first@ and flast@, recent hires first.last@.
@@ -57,6 +58,11 @@ PEOPLE = [
     Person("omar.haddad", "Omar", "Haddad", "Lot Attendant", "Operations", None, "kevin"),
     Person("grace.kim", "Grace", "Kim", "Revenue Analyst", "Accounting", None, "marcus"),  # second file-restore requester
     Person("luis.ortega", "Luis", "Ortega", "Maintenance Technician", "Facilities", None, "dennis"),
+    # Former employee, disabled: onboarding someone with her name must ask "rehire?" first (eval #3).
+    # first.last on purpose: as the newest account she sorts first in users.list, where a legacy format
+    # could sway the address the agent proposes for Priya.
+    Person("nina.alvarez", "Nina", "Alvarez", "Accounts Receivable Clerk", "Accounting", None, "marcus",
+           enabled=False),
 ]
 # Service account: an app signs in with it, no manager, no MFA. Listed in known_service_accounts.
 SERVICE_ACCOUNT = Person("reports", "Reports", "Service", "Service account (reporting app)", "IT")
@@ -266,7 +272,7 @@ def run(g: Graph, env: dict[str, str], *, files: bool = True, warn_priya: bool =
         print("Users")
         ids: dict[str, str] = {}
         for p in [*PEOPLE, SERVICE_ACCOUNT]:
-            ids[p.alias] = ensure_user(g, p, domain, passwords)["id"]
+            ids[p.alias] = ensure_user(g, p, domain, passwords, enabled=p.enabled)["id"]
         for p in PEOPLE:
             if p.manager:
                 set_manager(g, ids[p.alias], ids[p.manager])
@@ -286,7 +292,7 @@ def run(g: Graph, env: dict[str, str], *, files: bool = True, warn_priya: bool =
         # consumedUnits lags behind assignLicense, so count seats ourselves
         free = free_seats(primary)
         for p in PEOPLE:
-            license = p.license or ("primary" if on_trial else None)
+            license = p.license or ("primary" if on_trial and p.enabled else None)  # no seat for a leaver
             if not license:
                 continue
             sku = (p1 or primary) if license == "p1" else primary
