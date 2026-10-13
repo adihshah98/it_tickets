@@ -22,7 +22,7 @@ Each part ends with green tests and a commit, then a stop for review.
 | ---- | ---- | ----------------- | ------ |
 | 1 | Library: `approve`, `set_autonomy`, ceiling, `playbook_check`, version on the plan event, demotion; #27, #28 | Learned playbooks can run; A3 runs can demote; gate rule `autonomy.unproven` | **Done** |
 | 2 | `DraftSource`, `from_run`/`from_written`, the drafter (offline, FunctionModel) | New, nothing calls it yet | **Done** |
-| 3 | API routes + a CLI `save-playbook`; optional live draft of run 20 | New routes only | **Done** (offline); live pending your approval |
+| 3 | API routes + a CLI `save-playbook`; optional live draft of run 20 | New routes only | **Done** (live draft too) |
 
 **Needs your approval:** only Part 3's optional live step (one Opus drafter call on run 20, no tenant writes).
 
@@ -376,7 +376,37 @@ dropped IDs, a valid draft and its event, one retry carrying the problems, two f
 
 **Result:** `uv run pytest`: 458 passed. `ruff` is clean. No model was called.
 
-**Live (optional, needs your approval):** run `save-playbook 20` against `data/tech.db`. That's one Opus
+**Live (2026-10-13, approved):**
+
+- `echo n | uv run tech save-playbook 20 --by aditya --autonomy A3`: one Opus call, 3,462 input and
+  1,253 output tokens.
+  - **It passed every check on the first try**; no retry was needed. The "n" kept it unsaved, so the YAML
+    could be read before approving. It was then approved from run 20's `playbook_drafted` event, with no
+    second model call: `file.restore_version` v1, `agent_run`, A3. Its ceiling is A3 and it is in
+    `unproven()`, so below A3 every write would be approved.
+  - The record is at `backend/tests/evals/learned/file.restore_version-v1-run20.yaml`. It isn't committed:
+    it holds the ticket text and tenant IDs. Decide whether `learned/` belongs in git.
+- **What the draft learned (good):**
+  - it generalized: no file names or IDs;
+  - it kept the "every version is by SharePoint App, so go by times and sizes" lesson from run 20;
+  - it notes that UTC times must be converted to the requester's local time;
+  - "only one version → nothing to restore, escalate";
+  - "check the new current version matches";
+  - the two universal `never` lines, word for word.
+- **What to watch on Day 21 (Grace hands-free at A3):**
+  - **`must_investigate` grew to 4 reads:** `users.search` and `users.memberOf` were added, because run 20
+    made those calls. Every future restore must call them (lint rule 5). That's fine, but slower.
+  - **It invented an access rule** from run 20's `users.memberOf` read: "don't restore for a requester
+    without access to the site". It's a sensible rule, and Grace is a member of Northwind Operations in
+    the seed, but it is new policy that came from one read.
+  - **It leans towards asking the requester.** Close saves, a time mismatch after converting to local time,
+    or several matching files all mean "confirm with the requester", and it is a `never` line too. At A3
+    that is the right fallback, with no approver. But Grace's ticket must be unambiguous ("I overwrote it
+    at 10am today", with versions staged the evening before), or the hands-free run will end in a
+    question instead of DONE. Check this when re-staging for Day 21.
+- Day 22's reset clears this version and its autonomy row.
+
+**Originally planned:** run `save-playbook 20` against `data/tech.db`. That's one Opus
 call on Sophie's real run 20, with no tenant writes. Check that the draft passes the checks on the first or
 second try and reads sensibly. Approve it at A3 locally if it does. Grace's hands-free live run stays on
 Day 21. Day 22's reset clears learned versions.
