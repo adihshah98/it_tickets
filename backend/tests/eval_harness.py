@@ -504,13 +504,19 @@ async def test_live(case):
 # ------------------------------------------------------------------ the harness itself
 
 
+WEEK_4_LANDED = {25, 26}  # Week 4 cases whose feature is in (Day 17: the no-playbook path)
+
+
 def test_cases_cover_tech_md_section_11():
     ids = [str(c["id"]) for c in load_cases()]
     assert len(ids) == len(set(ids)), "case ids must be unique"
     assert {str(n) for n in range(1, 29)} <= set(ids)
     for case in load_cases():
         if case["id"] in range(23, 29):
-            assert case.get("xfail", "").startswith("Week 4 Day"), f"case {case['id']} lands later in Week 4"
+            landed = case["id"] in WEEK_4_LANDED
+            assert ("xfail" not in case) == landed, f"case {case['id']}: xfail iff it lands later in Week 4"
+            if not landed:
+                assert case["xfail"].startswith("Week 4 Day"), f"case {case['id']} lands later in Week 4"
 
 
 def test_live_cases_are_in_scope_and_judged_per_action():

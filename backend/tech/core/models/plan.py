@@ -149,6 +149,13 @@ class Plan(BaseModel):
         default=[], description="Anything asked for that this job must not do, quoted")
     escalate: bool = False
     escalation_reason: str | None = None
+    # The escalation write-up, for a ticket with no playbook (Tech.MD §4.9); optional otherwise.
+    diagnosis: str | None = Field(None, description="Escalating: your best explanation of the problem")
+    evidence: list[str] = Field(default=[], description="Escalating: what you read that supports the diagnosis")
+    checked: list[str] = Field(default=[], description="Escalating: what you checked and ruled out")
+    suggested_next_step: str | None = Field(None, description="Escalating: what a technician should do next")
+    missing_action: str | None = Field(
+        None, description="Escalating: the change that would fix it but that you can't propose, if any")
 
     def step(self, step_id: str) -> StepBase:
         for s in self.steps:

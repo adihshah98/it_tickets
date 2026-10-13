@@ -1,11 +1,12 @@
 """Policy gate: pure and table-driven, plus the run states `check` leads to."""
 
 import pytest
-from conftest import ACCOUNTING, IT_ADMINS, NEW, RDS_USERS, plan_with, step
+from conftest import ACCOUNTING, IT_ADMINS, MARCUS, NEW, RDS_USERS, plan_with, step
 
 from tech.core.models import Plan
 from tech.core.store import RunState, Store
 from tech.safety import gate
+from tech.safety.policy import NO_PLAYBOOK_ALLOWED
 
 
 def evaluate(plan, transcript, playbooks, facts, *, approved=True, intents=("user.onboard",)):
@@ -197,3 +198,49 @@ def test_check_without_approvals_stays_checked(store, transcript, playbooks, fac
     check(store, run_id, plan_with(drop=("buy_seat", "tap", "send_link", "assign_license_monday")),
           transcript, playbooks, facts)
     assert store.get_run(run_id).state == RunState.PLAN_CHECKED
+
+
+# ------------------------------------------------------------------ rule 3: no playbook
+
+
+def no_playbook(*steps: dict) -> Plan:
+    return Plan.model_validate({"intent": "unknown", "summary": "x", "steps": list(steps)})
+
+
+RENAME = step("rename", "user.update", {"userId": MARCUS, "jobTitle": "Lead"}, "write.reversible")
+ADD = step("add", "group.addMember", {"groupId": ACCOUNTING, "userId": MARCUS}, "write.reversible")
+TAP = step("tap", "tap.create", {"userId": MARCUS, "lifetimeInMinutes": 60, "isUsableOnce": True},
+           "security.credential")
+BLOCK = step("block", "user.update", {"userId": MARCUS, "accountEnabled": False}, "access.revoke")
+
+
+def test_the_no_playbook_allow_list_is_pinned():
+    assert {"user.update", "group.addMember", "group.removeMember", "mailbox.autoReply", "file.restoreVersion",
+            "link.sendOneTime"} == NO_PLAYBOOK_ALLOWED
+
+
+def test_without_a_playbook_every_allowed_write_needs_approval(transcript, facts):
+    result = decisions(evaluate(no_playbook(RENAME, ADD), transcript, {}, facts, intents=("unknown",)))
+    assert result == {"rename": ("approve", "no_playbook.approve"), "add": ("approve", "no_playbook.approve")}
+
+
+def test_without_a_playbook_a_credential_step_is_blocked(transcript, facts):
+    result = decisions(evaluate(no_playbook(TAP), transcript, {}, facts, intents=("unknown",)))
+    assert result == {"tap": ("block", "no_playbook.not_allowed")}
+
+
+def test_without_a_playbook_an_allowed_action_above_its_risk_is_blocked(transcript, facts):
+    result = evaluate(no_playbook(BLOCK), transcript, {}, facts, intents=("unknown",)).decisions[0]
+    assert (result.decision, result.rule_id) == ("block", "no_playbook.not_allowed")
+    assert "access.revoke" in result.reason
+
+
+def test_a3_cannot_make_a_no_playbook_write_automatic(transcript, facts):
+    a3 = at_level(facts, "A3", "unknown")
+    assert decisions(evaluate(no_playbook(RENAME), transcript, {}, a3, intents=("unknown",))) == {
+        "rename": ("approve", "no_playbook.approve")}
+
+
+def test_without_a_playbook_the_group_rules_still_block(transcript, facts):
+    admins = step("admins", "group.addMember", {"groupId": IT_ADMINS, "userId": MARCUS}, "write.reversible")
+    assert decisions(evaluate(no_playbook(admins), transcript, {}, facts, intents=("unknown",)))["admins"][0] == "block"

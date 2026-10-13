@@ -807,7 +807,6 @@ cases:
       checked: [message rules, mailbox settings]
       suggested_next_step: "Check the quarantine and message trace for citylots.com in the Exchange admin center"
       missing_action: "message trace / quarantine release (Exchange Online), not in the catalogue"
-    xfail: "Week 4 Day 17: no-playbook mode and the Escalation fields"
     expect:
       state: ESCALATED
       escalation: {kind: no_playbook, missing_action: true}
@@ -826,7 +825,6 @@ cases:
       summary: Give Dennis a TAP
       steps:
         - {id: tap, action: tap.create, params: {userId: "${dennis}", lifetimeInMinutes: 60, isUsableOnce: true}}
-    xfail: "Week 4 Day 17: gate rule 3 (no-playbook allow-list)"
     expect:
       gate_direct: {tap: block/no_playbook.not_allowed}
       state: ESCALATED

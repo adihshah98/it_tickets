@@ -20,6 +20,10 @@ Bounds (§4.1, §9):
   - A hard cap on model requests and tool calls (findings count as tool calls), plus a wall-clock timeout.
     Hitting either, a refusal, an unusable output or a model API error sends the run to ESCALATED
     with the findings so far.
+
+No playbook (Tech.MD §4.9): when no triaged intent has one, the model gets NO_PLAYBOOK_GUIDELINE in place
+of a playbook, tighter bounds (NO_PLAYBOOK_MAX_READS, NO_PLAYBOOK_TIMEOUT_S) and the linter's no-playbook
+mode. Its escalation is kind "no_playbook" and carries the plan's diagnosis fields.
 """
 
 from __future__ import annotations
@@ -49,6 +53,7 @@ from tech.graph.reads import Transcript, fetch, run_read
 from tech.graph.reads import users_search as search_users
 from tech.playbooks import ClientFacts, Playbook, PlaybookLibrary
 from tech.safety.lint import lint
+from tech.safety.policy import NO_PLAYBOOK_ALLOWED
 
 MODEL = "anthropic:claude-opus-5-5"
 MAX_READS = 25
@@ -59,6 +64,9 @@ SIGN_INS_TOP = 15  # the sign_ins tool's default, so a prefetch matches the usua
 # past the cap the model is told the history is unknown, and for a takeover check unknown means escalate.
 READ_TIMEOUTS_S = {"signIns.list": 30.0}
 LIMITS = UsageLimits(request_limit=20, tool_calls_limit=MAX_READS + 25)
+NO_PLAYBOOK_MAX_READS = 15
+NO_PLAYBOOK_TIMEOUT_S = 60.0
+ESCALATION_FIELDS = ("diagnosis", "evidence", "checked", "suggested_next_step", "missing_action")
 
 SETTINGS = AnthropicModelSettings(
     anthropic_effort="high",
@@ -91,6 +99,25 @@ Today is {today:%A %Y-%m-%d}. Tenant domain: {domain}.
 
 Client facts and playbooks:
 {playbooks}
+{guideline}"""
+
+NO_PLAYBOOK_GUIDELINE = """
+No playbook covers this ticket. Work it out from evidence:
+1. Say what the requester needs in one line (record_finding).
+2. Find the objects involved and read their current state.
+3. Form a hypothesis from what you read, and check it with another read where you can.
+
+Then do one of these:
+- Plan, only if the fix uses these actions and nothing else: {allowed}. Every step will need a person's
+  approval. Give every step an `expected`: the literal values a verify read should show afterwards.
+- Escalate (escalate=true, no steps) when the fix needs anything else, or you can't tell what is wrong.
+  Fill in diagnosis (your best explanation), evidence (what you read that supports it), checked (what you
+  looked at and ruled out), suggested_next_step (what a technician should do next) and missing_action (the
+  change that would fix it but that you can't propose, if there is one).
+Credentials (TAPs, MFA methods), licenses, access to someone's data, blocking sign-in and deleting anything
+always need a reviewed playbook: escalate those, never plan them.
+If a detail you need is ambiguous (which user, which file, which version), ask in questions_for_requester
+and plan no changes.
 """
 
 
@@ -337,12 +364,16 @@ async def investigate(
 ) -> Investigation:
     """INVESTIGATING -> PLAN_PROPOSED with a `plan` event, or -> ESCALATED with the findings so far."""
     store.set_state(run_id, RunState.INVESTIGATING)
+    playbooks = library.for_intents(triage.intents)
+    no_playbook = not playbooks
+    if no_playbook:
+        max_reads, timeout_s = min(max_reads, NO_PLAYBOOK_MAX_READS), min(timeout_s, NO_PLAYBOOK_TIMEOUT_S)
     deps = InvestigateDeps(graph=graph, facts=facts, recorder=Recorder(store, run_id), max_reads=max_reads,
-                           playbooks=library.for_intents(triage.intents),
-                           clean_sign_ins_for=clean_sign_ins_for)
+                           playbooks=playbooks, clean_sign_ins_for=clean_sign_ins_for)
     instructions = INSTRUCTIONS.format(
         max_reads=max_reads, today=today or date.today(), domain=domain,
         playbooks=library.prompt_text(triage.intents),
+        guideline=NO_PLAYBOOK_GUIDELINE.format(allowed=", ".join(sorted(NO_PLAYBOOK_ALLOWED))) if no_playbook else "",
     )
     agent = build_investigator(model)
     await prefetch_sign_ins(deps, graph, triage)
@@ -369,13 +400,15 @@ async def investigate(
         plan, usage = result.output, result.usage
         store.append_event(run_id, "plan", {
             "plan": plan.model_dump(mode="json", by_alias=True),
+            "no_playbook": no_playbook,
             "usage": {"requests": usage.requests, "tool_calls": usage.tool_calls,
                       "input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens,
                       "cache_read_tokens": usage.cache_read_tokens},
         })
         if plan.escalate:
-            store.set_state(run_id, RunState.ESCALATED, kind="investigator", reason=plan.escalation_reason,
-                            findings=deps.recorder.findings)
+            write_up = {k: v for k in ESCALATION_FIELDS if (v := getattr(plan, k))}
+            store.set_state(run_id, RunState.ESCALATED, kind="no_playbook" if no_playbook else "investigator",
+                            reason=plan.escalation_reason, findings=deps.recorder.findings, **write_up)
             return Investigation("escalated", plan, deps.recorder.findings, plan.escalation_reason,
                                  deps.transcript, deps.playbooks)
         store.set_state(run_id, RunState.PLAN_PROPOSED)

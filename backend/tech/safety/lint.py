@@ -17,9 +17,15 @@ Each problem is one sentence the model can act on; a non-empty list goes back to
                          confirm_on_approval entry), or the plan pauses with questions_for_requester.
   7. Ordering sane:      depends_on points only backwards and has no cycles.
 
-Rules 4-6 use the playbooks, so they run only for a playbook-backed plan (not an escalation or a
-no-playbook run). Rule 6 is deliberately lenient (keyword presence): the investigator has only two
-lint retries, so a false rejection there is worse than a missed question the gate still gates.
+Rules 4-6 use the playbooks, so they run only for a playbook-backed plan, not an escalation. Rule 6 is
+deliberately lenient (keyword presence): the investigator has only two lint retries, so a false
+rejection there is worse than a missed question the gate still gates.
+
+No-playbook mode (no triaged intent has a playbook, Tech.MD §4.9) changes rules 3-6:
+  3. the scope is policy.NO_PLAYBOOK_ALLOWED, at policy.NO_PLAYBOOK_RISKS, instead of allowed_actions;
+  4. the definition of done is each step's own `expected` result (plus close-out's reply, which isn't a
+     step), so every step needs a non-empty `expected`;
+  5-6. skipped: there is no must-investigate list or questions to resolve.
 """
 
 from __future__ import annotations
@@ -31,10 +37,10 @@ from typing import Any
 from pydantic import ValidationError
 
 from tech.core.models import GUID_RE, Plan, StepBase, parse_ref
-from tech.execution.catalogue import ACTIONS, FOLLOWUP_ACTIONS
+from tech.execution.catalogue import ACTIONS, FOLLOWUP_ACTIONS, ActionSpec
 from tech.graph.reads import Transcript
 from tech.playbooks import ClientFacts, Playbook
-from tech.safety.policy import group_problem
+from tech.safety.policy import NO_PLAYBOOK_ALLOWED, NO_PLAYBOOK_RISKS, group_problem
 
 # Which action produces each kind of step output a later step can reference.
 PRODUCES = {"id": {"user.create"}, "tap": {"tap.create"}}
@@ -89,10 +95,9 @@ def lint(plan: Plan, transcript: Transcript, playbooks: dict[str, Playbook], fac
     problems: list[str] = []
     if plan.escalate and not plan.steps:
         return problems
-    if plan.steps and not playbooks:
-        return ["There is no playbook for this ticket's intent, so propose no steps: set escalate=true and explain."]
 
-    allowed = allowed_actions(playbooks)
+    no_playbook = not playbooks
+    allowed = set(NO_PLAYBOOK_ALLOWED) if no_playbook else allowed_actions(playbooks)
     earlier: dict[str, str] = {}  # step id -> action, for steps before the current one
     needs: dict[str, set[str]] = {}  # step id -> every step it depends on, directly or not
 
@@ -133,20 +138,32 @@ def lint(plan: Plan, transcript: Transcript, playbooks: dict[str, Playbook], fac
                 problems.append(f"Step {sid}: {text} must point to a {makers} step, not {earlier[target]}.")
 
         # 3. in scope
-        if action not in allowed:
+        if no_playbook and action not in allowed:
+            problems.append(f"Step {sid}: {action} needs a reviewed playbook, and this ticket type has none. "
+                            f"Without one only {', '.join(sorted(allowed))} are possible: remove it, and if the fix "
+                            "needs it, escalate and name it in missing_action.")
+        elif action not in allowed:
             problems.append(f"Step {sid}: {action} is not allowed for this ticket type; remove it "
                             "(list anything it was meant to do under needs_technician or out_of_scope_requests).")
+        elif no_playbook and (risk := _risk(spec, params)) and risk not in NO_PLAYBOOK_RISKS:
+            problems.append(f"Step {sid}: this {action} is {risk}, which needs a reviewed playbook; without one "
+                            "only reversible changes are possible. Remove it, or escalate.")
         if action == "followup.schedule" and (later := FOLLOWUP_ACTIONS.get(params.get("kind", ""))):
             if later not in allowed:
                 problems.append(f"Step {sid}: the follow-up would run {later}, which is not allowed here.")
         if action == "group.addMember" and (problem := group_problem(params["groupId"], transcript, facts)):
             problems.append(f"Step {sid}: {problem[1]}.")
 
+        # 4. (no playbook) the step's own expected result is its definition of done
+        if no_playbook and not step.expected:
+            problems.append(f"Step {sid}: set expected to what a verify read should show afterwards; with no "
+                            "playbook, each step's expected result is how the run is checked as done.")
+
         earlier[sid] = action
 
     # 7. ordering sane (every step, referenced or not): backward deps only, no cycles
     problems += _ordering_problems(plan)
-    # 4-6 need the playbook; skip them for an escalation or a no-playbook plan (handled above)
+    # 4-6 need the playbook; an escalation returned above, and no-playbook mode covers rule 4 per step
     if playbooks:
         actions = {s.action for s in plan.steps}
         for playbook in playbooks.values():
@@ -155,6 +172,14 @@ def lint(plan: Plan, transcript: Transcript, playbooks: dict[str, Playbook], fac
             problems += _must_investigate_problems(playbook, transcript)
             problems += _question_problems(playbook, plan)
     return problems
+
+
+def _risk(spec: ActionSpec, params: dict[str, Any]) -> str | None:
+    """The catalogue's risk class for these params, or None if they don't validate (rule 1 says so)."""
+    try:
+        return spec.risk(spec.params.model_validate(params))
+    except ValidationError:
+        return None
 
 
 def _ordering_problems(plan: Plan) -> list[str]:

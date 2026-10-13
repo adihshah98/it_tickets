@@ -1,14 +1,19 @@
 """Policy gate (Tech.MD §8): a decision per step, auto | approve | block, plus a run-level hold.
 
 Plain code, evaluated after the linter. Risk classes come from the catalogue, never from the plan.
-Rule order: requester hold, then never/catalogue blocks, then the autonomy level, then risk-class
-rules, then the blast-radius guard. The first rule that blocks wins; otherwise the strictest decision
-wins. Autonomy is per intent per client (§8, from PlaybookLibrary.autonomy()): A1 blocks every write (a
-technician checklist), A2 leaves the risk-class rules in force, and A3 auto-approves reversible/revoke
-writes but never spend, data.access or security.credential. On an MFA reset a credential step is
+Rule order: requester hold, then never/catalogue blocks, then (rule 3) the no-playbook allow-list, then
+the autonomy level, then risk-class rules, then the blast-radius guard. The first rule that blocks wins;
+otherwise the strictest decision wins. Autonomy is per intent per client (§8, from
+PlaybookLibrary.autonomy()): A1 blocks every write (a technician checklist), A2 leaves the risk-class
+rules in force, and A3 auto-approves reversible/revoke writes but never spend, data.access or
+security.credential. On an MFA reset a credential step is
 labelled `mfa.oob_required`: it still needs approval, and runner.accept refuses to run it until
 out-of-band confirmation is recorded (the gate runs before anyone can confirm, so it can't block on it).
-The no-playbook rules arrive in Week 4.
+
+Rule 3, a run with no playbook (no triaged intent has one, Tech.MD §4.9): a step outside
+policy.NO_PLAYBOOK_ALLOWED, or above policy.NO_PLAYBOOK_RISKS, is `block` (no_playbook.not_allowed);
+every other step is `approve` (no_playbook.approve). It replaces the autonomy and risk-class rules, so no
+autonomy level, A3 included, can make a no-playbook write automatic.
 
 `evaluate` is pure. `check` records its result on a run: a gate_decision event per step, then the
 next state. The Day 5 runner calls `check` too.
@@ -26,7 +31,7 @@ from tech.execution.catalogue import ACTIONS
 from tech.graph.reads import Transcript
 from tech.playbooks import ClientFacts, Playbook
 from tech.safety.lint import allowed_actions, params_of
-from tech.safety.policy import group_problem
+from tech.safety.policy import NO_PLAYBOOK_ALLOWED, NO_PLAYBOOK_RISKS, group_problem
 
 BLAST_RADIUS = 20      # more writes than this of one risk class -> approve
 MAX_WRITES = 40        # more writes than this in one run -> block (Tech.MD §9 bounds)
@@ -95,7 +100,7 @@ def _risk_rule(risk: RiskClass, intents: Sequence[str], requester_approved: bool
 
 
 def _step(step: StepBase, *, intents: Sequence[str], requester_approved: bool, allowed: set[str],
-          facts: ClientFacts, autonomy_levels: Mapping[str, str],
+          no_playbook: bool, facts: ClientFacts, autonomy_levels: Mapping[str, str],
           transcript: Transcript) -> tuple[_Verdicts, RiskClass | None]:
     verdicts = _Verdicts()
     spec = ACTIONS.get(step.action)
@@ -106,6 +111,18 @@ def _step(step: StepBase, *, intents: Sequence[str], requester_approved: bool, a
     params = params_of(step)
     if step.action == "group.addMember" and (problem := group_problem(params["groupId"], transcript, facts)):
         verdicts.add("block", *problem)
+    typed = step.params if hasattr(step.params, "model_dump") else spec.params.model_validate(params)
+    risk = spec.risk(typed)
+
+    if no_playbook:  # rule 3
+        if step.action not in NO_PLAYBOOK_ALLOWED:
+            verdicts.add("block", "no_playbook.not_allowed", f"{step.action} needs a reviewed playbook first")
+        elif risk not in NO_PLAYBOOK_RISKS:
+            verdicts.add("block", "no_playbook.not_allowed", f"{risk} needs a reviewed playbook first")
+        else:
+            verdicts.add("approve", "no_playbook.approve", "no playbook for this request: every change needs approval")
+        return verdicts, risk
+
     if step.action not in allowed:
         verdicts.add("block", "playbook.not_allowed", f"{step.action} is not in the playbook's allowed_actions")
 
@@ -113,8 +130,6 @@ def _step(step: StepBase, *, intents: Sequence[str], requester_approved: bool, a
     if autonomy == "A1":  # the client runs this intent as a technician checklist; the agent writes nothing
         verdicts.add("block", "autonomy.a1", "this client reviews every step for this request (autonomy A1)")
 
-    typed = step.params if hasattr(step.params, "model_dump") else spec.params.model_validate(params)
-    risk = spec.risk(typed)
     decision, rule, reason = _risk_rule(risk, intents, requester_approved, autonomy)
     if step.risk_class != risk:
         reason += f" (the plan said {step.risk_class}; the catalogue says {risk})"
@@ -127,7 +142,8 @@ def evaluate(plan: Plan, *, requester_approved: bool, intents: Sequence[str], pl
     """`autonomy` is the per-intent levels from PlaybookLibrary.autonomy()."""
     allowed = allowed_actions(playbooks)
     judged = [(step, *_step(step, intents=intents, requester_approved=requester_approved, allowed=allowed,
-                            facts=facts, autonomy_levels=autonomy, transcript=transcript)) for step in plan.steps]
+                            no_playbook=not playbooks, facts=facts, autonomy_levels=autonomy, transcript=transcript))
+              for step in plan.steps]
 
     per_class = Counter(risk for _, _, risk in judged if risk is not None)
     for _, verdicts, risk in judged:

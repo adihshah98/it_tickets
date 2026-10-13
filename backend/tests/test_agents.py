@@ -500,3 +500,51 @@ async def test_a_sign_in_read_past_its_cap_is_unknown_not_clean(store, run_id, g
     [call] = [e.payload for e in store.events(run_id) if e.type == "tool_call"]
     assert not call["ok"] and "no answer within" in call["error"]
     assert not result.transcript.called("signIns.list")  # rule 5 doesn't count a read that never answered
+
+
+# ------------------------------------------------------------------ no playbook (Tech.MD §4.9)
+
+ESCALATION = {"intent": "unknown", "summary": "Vendor mail isn't reaching Kevin", "steps": [], "escalate": True,
+              "escalation_reason": "Probably quarantined", "diagnosis": "Mail from the vendor is quarantined",
+              "checked": ["inbox rules"], "suggested_next_step": "Check the quarantine",
+              "missing_action": "quarantine release (Exchange Online)"}
+
+
+def unknown_triage() -> Triage:
+    return Triage.model_validate({"intents": ["unknown"], "entities": {},
+                                  "requester": {"name": "Taylor", "email": TAYLOR}})
+
+
+async def test_a_ticket_with_no_playbook_gets_the_generic_guideline_and_tighter_bounds(store, run_id, graph, facts):
+    seen = []
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.append(info.instructions)
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, ESCALATION)])
+
+    result = await investigate(store, run_id, "vendor mail missing", unknown_triage(), requester_approved=True,
+                               graph=graph, facts=facts, domain=DOMAIN, library=shipped_library(store, facts),
+                               model=FunctionModel(respond))
+
+    assert "No playbook covers this ticket" in seen[0] and "At most 15 reads" in seen[0]
+    assert "intent: user.onboard" not in seen[0]  # client facts only, no playbook YAML
+    assert result.outcome == "escalated" and result.playbooks == {}
+    plan_event = store.last_event(run_id, "plan").payload
+    assert plan_event["no_playbook"] is True
+    escalated = store.last_event(run_id, "state").payload
+    assert escalated["kind"] == "no_playbook"
+    assert escalated["diagnosis"] == ESCALATION["diagnosis"]
+    assert escalated["missing_action"] == ESCALATION["missing_action"]
+    assert escalated["checked"] == ["inbox rules"] and "evidence" not in escalated  # empty fields are left out
+
+
+async def test_a_playbook_run_gets_no_generic_guideline(store, run_id, graph, facts):
+    seen = []
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.append(info.instructions)
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, PLAN)])
+
+    await run(store, run_id, graph, facts, FunctionModel(respond))
+    assert "No playbook covers this ticket" not in seen[0] and "At most 25 reads" in seen[0]
+    assert store.last_event(run_id, "plan").payload["no_playbook"] is False

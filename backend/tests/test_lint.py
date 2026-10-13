@@ -5,6 +5,7 @@ from conftest import (
     ACCOUNTING,
     ANNOUNCE_DL,
     IT_ADMINS,
+    MARCUS,
     NEW,
     ONBOARD_PLAN,
     ORG_WIDE,
@@ -14,6 +15,7 @@ from conftest import (
 )
 
 from tech.core.models import Plan
+from tech.graph.reads import Transcript
 from tech.safety.lint import lint
 
 INVENTED = "00000000-1111-2222-3333-444444444444"
@@ -71,9 +73,48 @@ def test_a_followup_that_would_run_a_disallowed_action_is_out_of_scope(transcrip
     assert "the follow-up would run license.assign" in found
 
 
-def test_no_playbook_means_no_steps(transcript, facts):
-    [found] = problems(plan_with(), transcript, {}, facts)
-    assert "set escalate=true" in found
+# ------------------------------------------------------------------ no-playbook mode (rules 3-6)
+
+
+def no_playbook_plan(*steps: dict) -> Plan:
+    return Plan.model_validate({"intent": "unknown", "summary": "x", "steps": list(steps)})
+
+
+def expecting(s: dict, expected: dict) -> dict:
+    return s | {"expected": expected}
+
+
+RENAME = expecting(step("rename", "user.update", {"userId": MARCUS, "jobTitle": "Lead"}, "write.reversible"),
+                   {"jobTitle": "Lead"})
+
+
+def test_without_a_playbook_an_allow_listed_step_with_an_expected_result_passes(transcript, facts):
+    assert problems(no_playbook_plan(RENAME), transcript, {}, facts) == []
+
+
+def test_without_a_playbook_every_step_needs_an_expected_result(transcript, facts):
+    [found] = problems(no_playbook_plan(RENAME | {"expected": {}}), transcript, {}, facts)
+    assert found.startswith("Step rename: set expected")
+
+
+def test_without_a_playbook_a_credential_step_is_sent_back_to_escalate(transcript, facts):
+    tap = expecting(step("tap", "tap.create", {"userId": MARCUS, "lifetimeInMinutes": 60, "isUsableOnce": True},
+                         "security.credential"), {"isUsableOnce": True})
+    [found] = problems(no_playbook_plan(tap), transcript, {}, facts)
+    assert "tap.create needs a reviewed playbook" in found and "missing_action" in found
+
+
+def test_without_a_playbook_a_user_update_may_not_block_sign_in(transcript, facts):
+    block = expecting(step("block", "user.update", {"userId": MARCUS, "accountEnabled": False}, "access.revoke"),
+                      {"accountEnabled": False})
+    [found] = problems(no_playbook_plan(block), transcript, {}, facts)
+    assert "this user.update is access.revoke" in found
+
+
+def test_without_a_playbook_there_is_nothing_that_must_be_investigated(facts):
+    one_read = Transcript()  # no users.list, subscribedSkus... that a playbook's must_investigate would want
+    one_read.record("users.get", {"user_id": MARCUS}, {"id": MARCUS})
+    assert problems(no_playbook_plan(RENAME), one_read, {}, facts) == []
 
 
 def test_an_escalation_passes(transcript, playbooks, facts):

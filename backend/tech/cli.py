@@ -36,6 +36,9 @@ def show(event: Event) -> None:
             label = f"{p['kind']}: " if p.get("kind") else ""
             extra = f"  ({label}{p['reason']})" if p.get("reason") else ""
             print(f"== {p['to']}{extra}", flush=True)
+            for key in ("diagnosis", "suggested_next_step", "missing_action"):  # a no-playbook escalation
+                if p.get(key):
+                    print(f"   {key.replace('_', ' ')}: {p[key]}", flush=True)
             for item in p.get("rollback", []):
                 print(f"   rollback offered: {item['step_id']}: {item['compensate']}", flush=True)
         case "triage":

@@ -1,7 +1,8 @@
-"""Facts about a step's target that both the linter and the gate judge it by.
+"""What both the linter and the gate judge a step by: facts about its target, and the no-playbook allow-list.
 
 The linter uses them to send the model back to fix its plan; the gate checks them again and blocks,
-so a plan that somehow skipped the linter still can't add anyone to these groups.
+so a plan that somehow skipped the linter still can't add anyone to these groups, or make a change a
+ticket type with no playbook may not make.
 """
 
 from __future__ import annotations
@@ -13,6 +14,16 @@ from tech.playbooks import ClientFacts
 
 PRIVILEGED_NAME = re.compile(r"\b(admins?|administrators?|privileged)\b", re.IGNORECASE)
 UNMANAGEABLE_KINDS = {"distribution_list": "a distribution list", "mail_security": "a mail-enabled security group"}
+
+# A run with no playbook (Tech.MD §4.9) may use only these actions, and only at these risk classes: so
+# user.update may rename or move someone but not block their sign-in (access.revoke). Credential, spend,
+# data-access, revoking and destructive changes need a reviewed playbook first. file.restoreVersion is
+# Week 4 Day 18's; until it is in the catalogue, the catalogue check blocks it.
+NO_PLAYBOOK_ALLOWED = frozenset({
+    "user.update", "group.addMember", "group.removeMember", "mailbox.autoReply", "file.restoreVersion",
+    "link.sendOneTime",
+})
+NO_PLAYBOOK_RISKS = frozenset({"write.reversible", "none"})
 
 
 def group_problem(group_id: str, transcript: Transcript, facts: ClientFacts) -> tuple[str, str] | None:
