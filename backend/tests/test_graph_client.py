@@ -2,7 +2,7 @@ import httpx
 import pytest
 import respx
 
-from tech.graph.client import GRAPH, GraphClient, GraphError, odata_str
+from tech.graph.client import GRAPH, GraphClient, GraphError, GraphTransportError, odata_str
 
 
 class FakeTokens:
@@ -148,3 +148,27 @@ async def test_204_returns_none(client):
 
 def test_odata_str_escapes_quotes():
     assert odata_str("O'Brien") == "O''Brien"
+
+
+@respx.mock
+async def test_a_read_that_times_out_is_tried_again(client, sleeps):
+    respx.get(f"{GRAPH}/auditLogs/signIns").mock(side_effect=[httpx.ReadTimeout("slow"), httpx.Response(200, json={})])
+    assert await client.get("/auditLogs/signIns") == {}
+    assert sleeps == [2.0]
+
+
+@respx.mock
+async def test_a_read_that_keeps_timing_out_is_a_graph_error(client):
+    respx.get(f"{GRAPH}/auditLogs/signIns").mock(side_effect=httpx.ReadTimeout("slow"))
+    with pytest.raises(GraphError) as caught:  # so every Graph-error handler covers it
+        await client.get("/auditLogs/signIns")
+    assert isinstance(caught.value, GraphTransportError)
+    assert caught.value.status == 0 and caught.value.code == "ReadTimeout"
+
+
+@respx.mock
+async def test_a_write_that_times_out_is_not_repeated(client):
+    route = respx.post(f"{GRAPH}/users").mock(side_effect=httpx.ReadTimeout("slow"))
+    with pytest.raises(GraphTransportError, match="may or may not have been applied"):
+        await client.post("/users", {"displayName": "x"})
+    assert route.call_count == 1

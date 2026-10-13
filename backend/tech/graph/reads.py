@@ -310,14 +310,22 @@ async def demo_sign_ins(graph: GraphClient, user_id: str, top: int = 15, now: da
     return rows[:max(1, min(top, 50))]
 
 
-async def run_read(graph: GraphClient, transcript: Transcript, tool: str, *, clean_sign_ins_for: str | None = None,
-                   **args: Any) -> Any:
-    """Run a read tool and record the call and the IDs it observed. Graph errors are recorded, then re-raised.
-    `clean_sign_ins_for` (the MFA demo setting) swaps in demo_sign_ins for that one user's signIns.list."""
+async def fetch(graph: GraphClient, tool: str, *, clean_sign_ins_for: str | None = None, **args: Any) -> Any:
+    """Run a read tool without recording it. `clean_sign_ins_for` (the MFA demo setting) swaps in
+    demo_sign_ins for that one user's signIns.list."""
     demo = (tool == "signIns.list" and clean_sign_ins_for is not None
             and str(args.get("user_id", "")).lower() == clean_sign_ins_for.lower())
+    return await (demo_sign_ins(graph, **args) if demo else READS[tool](graph, **args))
+
+
+async def run_read(graph: GraphClient, transcript: Transcript, tool: str, *, clean_sign_ins_for: str | None = None,
+                   prefetched: Awaitable[Any] | None = None, **args: Any) -> Any:
+    """Run a read tool and record the call and the IDs it observed. Graph errors are recorded, then re-raised.
+    `prefetched` is this same read, already started (the investigator's sign-in prefetch): it is awaited and
+    recorded exactly as if it had been run now."""
     try:
-        result = await (demo_sign_ins(graph, **args) if demo else READS[tool](graph, **args))
+        result = await (prefetched if prefetched is not None
+                        else fetch(graph, tool, clean_sign_ins_for=clean_sign_ins_for, **args))
     except GraphError as exc:
         transcript.record(tool, args, error=f"{exc.status} {exc.code}: {exc.message}")
         raise

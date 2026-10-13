@@ -196,3 +196,85 @@ and DoD do the right thing. The model's judgement is the live tier's job.
 1. **Now:** review part 1 and decide D1-D3.
 2. After part 2: review the diff to `lint.py`, `runner.py` and `closeout.py`.
 3. Before part 3's seed run and part 4's live run: approve the tenant writes and the spend.
+
+---
+
+## Live results
+
+### Run 1 (2026-10-13): 1 of 4 passed, 7 min 22 s
+
+| Case | Result | Why |
+| ---- | ------ | --- |
+| 1 onboarding | **Pass**: DONE, every DoD probe passed | Investigator: 4 requests, 13 tool calls, 81k input tokens (46k cached), 4.8k output |
+| 7 offboarding | Error | `httpx.ReadTimeout` on the investigator's `signIns.list` read (`GET /auditLogs/signIns`, 60 s client timeout) |
+| 11 MFA reset | Error | `tenant/reset.py` timed out reading Temporary Access Passes before the case started |
+| 20 `reports@` | Error | `httpx.ReadTimeout` on `signIns.list`, as in #7 |
+
+**None of the failures is the agent judging wrongly; Graph was slow.** Timed right after the run:
+- `GET /auditLogs/signIns?$top=15` took **33.6 s**;
+- `GET /users` took 0.2 s.
+
+With the per-user `$filter`, the sign-in read went past 60 s. Dennis's happy path doesn't touch this
+endpoint (his sign-ins are the demo mock), but every other sign-in read does: the #12/#20 refusal beats,
+and any offboarding where the model chooses to check sign-ins.
+
+**Product gap the run exposed.** A transport error during investigation isn't handled.
+- The investigator's `_read` catches `GraphError` only, so an `httpx.ReadTimeout` propagates out of
+  `runner.start`.
+- The run is left in `INVESTIGATING`. Through the API, the background task fails and the run hangs.
+- A Graph error (4xx/5xx), by contrast, goes back to the model as a tool error, and the model carries on.
+
+**Tenant state afterwards:** clean.
+- #20's reset completed before its investigation timed out, and #20 writes nothing.
+- #11 never ran, so Dennis still has Authenticator.
+
+**Fix (after run 1):** in `graph/client.py`, no response from Graph is now handled like a Graph error.
+- A GET that gets no response is tried once more, after 2 s.
+- If it still gets none, or if a write gets none, `GraphTransportError` is raised. It is a `GraphError`
+  subclass with status 0, so the existing handlers cover it:
+  - the investigator tells the model the read failed, and the model carries on;
+  - the executor fails the step, with the usual escalation and rollback offer;
+  - a DoD probe fails.
+- A write is never repeated, because it may already have been applied.
+- `tenant/graph.py` (seed and reset) also retries a GET that gets no response, up to 3 tries.
+- Tests: a read retried after a timeout, a persistent timeout surfacing as a `GraphError`, a write not
+  repeated, and the investigator carrying on after a timed-out read.
+
+**Not yet done:** a live re-run of #7, #11 and #20.
+
+### Why the sign-in reads are slow, and what changed (2026-10-13)
+
+`/auditLogs/signIns` searches Entra's sign-in log store; it isn't an indexed directory read. Timings on
+the tenant:
+
+| Query | Time | Rows |
+| ----- | ---- | ---- |
+| `userId eq` Kevin, top 15 (what the agent sends) | 39.1 s | 0 |
+| The same plus `createdDateTime ge` 14 days | 57.2 s | 0 |
+| No filter, top 15 | 28.4 s | 15 |
+| `createdDateTime ge` 14 days only | 19.4 s | 15 |
+| `GET /users` | 0.2 s | 5 |
+
+Filters don't help, and a query with no matches is among the slowest. The investigator's budget is 90 s,
+so one sign-in read can use most of it.
+
+**Changes:**
+1. **The model is steered away from the read.** The `sign_ins` tool description now says it takes
+   20-60 s, is meant for MFA resets and suspected takeovers, and that `users_get`'s `signInActivity`
+   answers "when did they last sign in" instantly. That covers the offboarding case, #7.
+2. **The MFA subject's sign-ins are prefetched.**
+   - On an `mfa.reset` run, investigation begins by resolving the subject: intake's `subject_user_hint`
+     if it matches exactly one user, else the sender.
+   - It then starts that user's `signIns.list` (top 15) in the background.
+   - When the model asks for the same read, it awaits the prefetch. The `tool_call` event and the
+     transcript are identical to a normal read, and the subject lookup is never in the transcript, so
+     grounding still needs the model's own reads.
+   - An unused prefetch is cancelled. The Dennis demo mock still applies, because it goes through the
+     same `reads.fetch`.
+   - **Limit:** the subject is only known after intake, so the prefetch hides the model's first turn
+     (roughly 10-20 s), not the whole read. Not yet measured live.
+   - Tests in `test_agents.py`:
+     - one Graph query when the model asks, and the prefetch is under way before its first turn;
+     - no trace when the model never asks;
+     - no prefetch off an MFA reset, or when the hint matches more than one user;
+     - the demo mock is honoured.

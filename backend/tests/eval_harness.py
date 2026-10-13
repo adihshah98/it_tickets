@@ -421,7 +421,9 @@ def summarize(store: Store, run_id: int) -> dict[str, Any]:
             "failed": [e.payload for e in store.events_of(run_id, "step_failed")]
             + [e.payload for e in store.events_of(run_id, "done_check") if not e.payload["ok"]]
             + [e.payload for e in store.events_of(run_id, "error")],
-            "usage": [e.payload["usage"] for e in store.events_of(run_id, "plan")]}
+            "usage": [e.payload["usage"] for e in store.events_of(run_id, "plan")],
+            "reads": [(e.payload["tool"], e.payload["t"], e.payload["ok"])
+                      for e in store.events_of(run_id, "tool_call")]}
 
 
 def case_params() -> list:
@@ -493,7 +495,8 @@ async def test_live(case):
     if any(links.decrypt(link, rt.link_key) in events for link in links.for_run(store, run_id)):
         problems.append("a TAP is in the event log")
     summary = summarize(store, run_id)
-    print(f"\nlive case {case['id']}: {summary['states'][-1]}; usage {summary['usage']}")
+    print(f"\nlive case {case['id']}: {summary['states'][-1]}; usage {summary['usage']}; "
+          f"reads (tool, seconds into investigation, ok): {summary['reads']}")
     assert not problems, "\n".join([f"live case {case['id']} ({case['name']}):", *problems, f"run: {summary}"])
 
 

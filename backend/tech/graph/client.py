@@ -6,6 +6,10 @@ Retry policy is Tech.MD §4.6, owned by code, never the model:
   - Replication lag (404, or 400 "...does not exist..." on an object we just created):
     only when the caller passes retry_replication=True; 5 tries, backoff over about a minute.
   - Anything else (403, other 400s): raise immediately.
+  - No response (a timeout, a dropped connection): a GET is tried TRANSPORT_TRIES times; then, or at once for a
+    write (which may have been applied), GraphTransportError. It is a GraphError, so every caller that handles
+    Graph errors handles it too: the investigator tells the model the read failed, the executor fails the
+    step, a DoD probe fails, instead of the exception leaving a run stuck mid-state.
 
 Each wait is reported to the `on_retry` listener of the current context (the executor sets it per step,
 so the workspace can show "↻ retried"). A context variable, because concurrent runs share one client.
@@ -27,6 +31,7 @@ TokenProvider = Callable[[], Awaitable[tuple[str, float]]]  # -> (access token, 
 
 THROTTLE_TRIES = 6
 SERVER_ERROR_TRIES = 3
+TRANSPORT_TRIES = 2  # Graph's sign-in log has taken over 60 s to answer (Build-Day16 live results)
 REPLICATION_DELAYS = (4.0, 8.0, 16.0, 32.0)  # 5 tries, 60 s of waiting in total
 TOKEN_REFRESH_MARGIN = 300
 
@@ -43,6 +48,18 @@ class GraphError(RuntimeError):
         self.code: str = err.get("code", "")
         self.message: str = err.get("message", "")
         super().__init__(f"{resp.request.method} {resp.request.url} -> {self.status} {self.code}: {self.message}")
+
+
+class GraphTransportError(GraphError):
+    """No HTTP response from Graph (status 0): a timeout or a dropped connection."""
+
+    def __init__(self, method: str, url: str, exc: httpx.TransportError):
+        self.status = 0
+        self.code = type(exc).__name__
+        self.message = (f"no response from Graph ({exc or 'timed out'}); it may succeed if tried again"
+                        if method == "GET" else
+                        f"no response from Graph ({exc or 'timed out'}); the change may or may not have been applied")
+        RuntimeError.__init__(self, f"{method} {url} -> {self.code}: {self.message}")
 
 
 def odata_str(value: str) -> str:
@@ -92,12 +109,19 @@ class GraphClient:
         retry_replication: bool = False,
     ) -> Any:
         url = path if path.startswith("https://") else GRAPH + path
-        throttled = server_errors = replication = 0
+        throttled = server_errors = replication = transport = 0
         while True:
-            resp = await self._http.request(
-                method, url, json=json, content=content, params=params,
-                headers=await self._auth() | (headers or {}),
-            )
+            try:
+                resp = await self._http.request(
+                    method, url, json=json, content=content, params=params,
+                    headers=await self._auth() | (headers or {}),
+                )
+            except httpx.TransportError as exc:
+                if method == "GET" and transport < TRANSPORT_TRIES - 1:
+                    transport += 1
+                    await self._wait("no_response", 2.0)
+                    continue
+                raise GraphTransportError(method, url, exc) from exc
             if resp.status_code == 429 and throttled < THROTTLE_TRIES - 1:
                 throttled += 1
                 await self._wait("throttled", float(resp.headers.get("Retry-After", 2**throttled)))

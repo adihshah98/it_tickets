@@ -145,6 +145,18 @@ async def test_graph_errors_go_back_to_the_model_not_up_the_stack(store, run_id,
 
 
 @respx.mock
+async def test_a_read_with_no_response_goes_back_to_the_model(store, run_id, graph, facts):
+    # Build-Day16 live run 1: a slow sign-in log raised httpx.ReadTimeout out of runner.start
+    respx.get(f"{GRAPH}/auditLogs/signIns").mock(side_effect=httpx.ReadTimeout("slow"))
+    model = scripted([("sign_ins", {"user_id": MARCUS})], [("PLAN", PLAN)])
+    result = await run(store, run_id, graph, facts, model)
+
+    assert result.plan is not None
+    [call] = [e.payload for e in store.events(run_id) if e.type == "tool_call"]
+    assert not call["ok"] and call["error"].startswith("0 ReadTimeout")
+
+
+@respx.mock
 async def test_read_budget_tells_the_model_to_submit(store, run_id, graph, facts):
     route = respx.get(f"{GRAPH}/subscribedSkus").mock(return_value=httpx.Response(200, json={"value": []}))
     returns = {}
@@ -325,3 +337,82 @@ async def test_a_plan_still_rejected_after_the_retries_escalates(store, run_id, 
     last = store.events(run_id)[-1].payload
     assert last["kind"] == "lint" and INVENTED in last["reason"]
     assert len([e for e in store.events(run_id) if e.type == "lint_result"]) == 3  # first try + 2 retries
+
+
+# ------------------------------------------------------------------ the MFA sign-in prefetch
+
+DENNIS = "4de26d55-a0ad-487f-837c-3d6bec07fce6"
+SIGN_IN = {"createdDateTime": "2026-10-12T15:30:00Z", "appDisplayName": "Teams", "ipAddress": "98.42.17.203",
+           "status": {"errorCode": 0}, "location": {"city": "Fremont", "countryOrRegion": "US"}}
+MFA_STOP = {"intent": "mfa.reset", "summary": "stop", "steps": [], "escalate": True, "escalation_reason": "test"}
+
+
+def mfa_triage(hint: str | None = "Dennis") -> Triage:
+    return Triage.model_validate({"intents": ["mfa.reset"], "entities": {"subject_user_hint": hint},
+                                  "requester": {"name": "Dennis", "email": f"dennis@{DOMAIN}"}})
+
+
+async def run_mfa(store, run_id, graph, facts, model, triage_=None, **kw):
+    return await investigate(store, run_id, "lost my phone, reset my MFA", triage_ or mfa_triage(),
+                             requester_approved=True, graph=graph, facts=facts, domain=DOMAIN, model=model,
+                             today=date(2026, 10, 12), **kw)
+
+
+@respx.mock
+async def test_an_mfa_reset_reads_the_subjects_sign_ins_once_started_early(store, run_id, graph, facts):
+    respx.get(f"{GRAPH}/users").mock(return_value=httpx.Response(200, json={"value": [
+        {"id": DENNIS, "displayName": "Dennis Okafor"}]}))
+    sign_ins = respx.get(f"{GRAPH}/auditLogs/signIns").mock(return_value=httpx.Response(200, json={"value": [SIGN_IN]}))
+    before_first_turn = []
+
+    def respond(messages, info: AgentInfo) -> ModelResponse:
+        if len(messages) == 1:
+            before_first_turn.append(sign_ins.call_count)
+            return ModelResponse(parts=[ToolCallPart("sign_ins", {"user_id": DENNIS})])
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, MFA_STOP)])
+
+    result = await run_mfa(store, run_id, graph, facts, FunctionModel(respond))
+
+    assert before_first_turn == [1]  # under way before the model asked
+    assert sign_ins.call_count == 1  # the model's call used it: one slow query, not two
+    [call] = [e.payload for e in store.events(run_id) if e.type == "tool_call"]
+    assert call["tool"] == "signIns.list" and call["ok"] and call["result"][0]["city"] == "Fremont"
+    assert [c.tool for c in result.transcript.calls] == ["signIns.list"]  # the subject lookup isn't in it
+
+
+async def test_an_unused_prefetch_leaves_no_trace(store, run_id, graph, facts):
+    with respx.mock(assert_all_called=False) as router:
+        router.get(f"{GRAPH}/users").mock(return_value=httpx.Response(200, json={"value": [{"id": DENNIS}]}))
+        router.get(f"{GRAPH}/auditLogs/signIns").mock(return_value=httpx.Response(200, json={"value": [SIGN_IN]}))
+        result = await run_mfa(store, run_id, graph, facts, scripted([("PLAN", MFA_STOP)]))
+
+    assert result.transcript.calls == [] and not result.transcript.observed(DENNIS)
+    assert not [e for e in store.events(run_id) if e.type == "tool_call"]
+
+
+async def test_no_prefetch_off_an_mfa_reset_or_for_an_ambiguous_subject(store, graph, facts):
+    with respx.mock(assert_all_called=False) as router:
+        users = router.get(f"{GRAPH}/users").mock(return_value=httpx.Response(200, json={"value": [
+            {"id": DENNIS}, {"id": MARCUS}]}))
+        sign_ins = router.get(f"{GRAPH}/auditLogs/signIns").mock(return_value=httpx.Response(200, json={"value": []}))
+
+        await run(store, store.create_run(store.create_ticket(TICKET, TAYLOR).id).id, graph, facts,
+                  scripted([("PLAN", PLAN)]))  # onboarding
+        assert users.call_count == 0
+        await run_mfa(store, store.create_run(store.create_ticket(TICKET, TAYLOR).id).id, graph, facts,
+                      scripted([("PLAN", MFA_STOP)]), mfa_triage("D"))  # two users match "D"
+        assert users.call_count == 1 and sign_ins.call_count == 0
+
+
+@respx.mock
+async def test_the_prefetch_honours_the_demo_sign_in_mock(store, run_id, graph, facts):
+    respx.get(f"{GRAPH}/users/dennis%40{DOMAIN}").mock(return_value=httpx.Response(200, json={"id": DENNIS}))
+    respx.get(f"{GRAPH}/users/{DENNIS}").mock(return_value=httpx.Response(200, json={
+        "id": DENNIS, "createdDateTime": "2026-10-01T16:00:00Z"}))
+    audit = respx.get(f"{GRAPH}/auditLogs/signIns").mock(return_value=httpx.Response(200, json={"value": []}))
+    model = scripted([("sign_ins", {"user_id": DENNIS})], [("PLAN", MFA_STOP)])
+
+    await run_mfa(store, run_id, graph, facts, model, mfa_triage(None), clean_sign_ins_for=DENNIS)
+
+    [call] = [e.payload for e in store.events(run_id) if e.type == "tool_call"]
+    assert call["result"][0]["city"] == "Sacramento" and audit.call_count == 0

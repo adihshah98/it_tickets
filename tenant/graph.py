@@ -59,10 +59,16 @@ class Graph:
     ) -> Any:
         url = path if path.startswith("https://") else GRAPH + path
         for attempt in range(8):
-            resp = self._http.request(
-                method, url, json=json, content=content, params=params,
-                headers=self._auth() | (headers or {}),
-            )
+            try:
+                resp = self._http.request(
+                    method, url, json=json, content=content, params=params,
+                    headers=self._auth() | (headers or {}),
+                )
+            except httpx.TransportError:  # Graph can take over 60 s to answer; a read is safe to repeat
+                if method != "GET" or attempt >= 2:
+                    raise
+                time.sleep(2)
+                continue
             if resp.status_code in (429, 502, 503, 504):
                 time.sleep(float(resp.headers.get("Retry-After", 2**attempt)))
                 continue

@@ -7,6 +7,13 @@ through `run_read`, so the Transcript holds the observed IDs the Day 4 linter ch
 The linter (safety/lint.py, rules 1-3) is the output validator: a rejected plan goes back to the
 model with the reasons, at most LINT_RETRIES times, and each attempt is a lint_result event.
 
+Sign-in prefetch: Graph's sign-in log takes 20-60 s a query (Build-Day16 live results), and an MFA reset
+can't be judged without it. So on an MFA reset whose subject intake names (or, failing that, the requester)
+resolves to exactly one user, the subject's signIns.list starts in the background as investigation begins.
+When the model asks for that read, it awaits the prefetch instead of starting a new query; the tool_call
+event and the transcript are the same either way, and the prefetch's lookup is never in the transcript, so
+grounding still needs the model's own reads. A prefetch the model never asks for is cancelled.
+
 Bounds (§4.1, §9):
   - At most MAX_READS Graph reads. After that the read tools answer "budget used up" so the model
     submits what it has, as §4.1 asks, instead of the run failing.
@@ -22,6 +29,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Literal
+from urllib.parse import quote
 
 from pydantic_ai import Agent, ModelRetry, RunContext, ToolOutput
 from pydantic_ai.exceptions import (
@@ -37,7 +45,8 @@ from pydantic_ai.usage import UsageLimits
 from tech.core.models import Plan, Triage
 from tech.core.store import RunState, Store
 from tech.graph.client import GraphClient, GraphError
-from tech.graph.reads import Transcript, run_read
+from tech.graph.reads import Transcript, fetch, run_read
+from tech.graph.reads import users_search as search_users
 from tech.playbooks import ClientFacts, Playbook, load_playbooks, prompt_text
 from tech.safety.lint import lint
 
@@ -45,6 +54,7 @@ MODEL = "anthropic:claude-opus-5-5"
 MAX_READS = 25
 TIMEOUT_S = 90.0
 LINT_RETRIES = 2
+SIGN_INS_TOP = 15  # the sign_ins tool's default, so a prefetch matches the usual call
 LIMITS = UsageLimits(request_limit=20, tool_calls_limit=MAX_READS + 25)
 
 SETTINGS = AnthropicModelSettings(
@@ -120,6 +130,7 @@ class InvestigateDeps:
     transcript: Transcript = field(default_factory=Transcript)
     max_reads: int = MAX_READS
     clean_sign_ins_for: str | None = None  # the MFA demo's one user with a clean sign-in history (reads.py)
+    prefetched: dict[tuple[str, str, int], asyncio.Task] = field(default_factory=dict)  # (tool, user, top) -> read
     lint_attempts: int = 0
     last_problems: list[str] = field(default_factory=list)
 
@@ -133,9 +144,10 @@ async def _read(ctx: RunContext[InvestigateDeps], tool: str, **args: Any) -> Any
         error = f"read budget of {deps.max_reads} used up; submit your plan (or an escalation) now"
         deps.recorder.tool_call(tool, args, error=error)
         return {"error": error}
+    prefetched = deps.prefetched.pop((tool, str(args.get("user_id", "")).lower(), args.get("top")), None)
     try:
         result = await run_read(deps.graph, deps.transcript, tool, clean_sign_ins_for=deps.clean_sign_ins_for,
-                                **args)
+                                prefetched=prefetched, **args)
     except GraphError as exc:  # the model sees the error (e.g. a 404) and can carry on
         error = f"{exc.status} {exc.code}: {exc.message}"
         deps.recorder.tool_call(tool, args, error=error)
@@ -179,8 +191,11 @@ async def subscribed_skus(ctx: RunContext[InvestigateDeps]) -> list[dict]:
     return await _read(ctx, "subscribedSkus.list")
 
 
-async def sign_ins(ctx: RunContext[InvestigateDeps], user_id: str, top: int = 15) -> list[dict]:
-    """Recent interactive sign-ins for a user: time, app, result code, location, client."""
+async def sign_ins(ctx: RunContext[InvestigateDeps], user_id: str, top: int = SIGN_INS_TOP) -> list[dict]:
+    """Recent interactive sign-ins for a user: time, app, result code, location, client.
+    SLOW: Graph's sign-in log takes 20-60 s per query. Use it for MFA resets and suspected account
+    takeovers. For when someone last signed in (e.g. a leaver who never signed in), use users_get,
+    whose signInActivity answers instantly."""
     return await _read(ctx, "signIns.list", user_id=user_id, top=top)
 
 
@@ -268,6 +283,31 @@ class Investigation:
     playbooks: dict[str, Playbook] = field(default_factory=dict)
 
 
+async def prefetch_sign_ins(deps: InvestigateDeps, graph: GraphClient, triage: Triage) -> None:
+    """On an MFA reset, start the subject's signIns.list now (see the module docstring)."""
+    if "mfa.reset" not in triage.intents:
+        return
+    hint = (triage.entities.subject_user_hint or "").strip()
+    try:
+        if hint:
+            found = await search_users(graph, hint)
+            subject = found[0]["id"] if len(found) == 1 else None
+        else:  # "reset my MFA": the subject is the sender
+            subject = (await graph.get(f"/users/{quote(triage.requester.email)}", params={"$select": "id"}))["id"]
+    except GraphError:
+        return
+    if subject:
+        deps.prefetched[("signIns.list", subject.lower(), SIGN_INS_TOP)] = asyncio.create_task(fetch(
+            graph, "signIns.list", clean_sign_ins_for=deps.clean_sign_ins_for, user_id=subject, top=SIGN_INS_TOP))
+
+
+async def cancel_prefetches(deps: InvestigateDeps) -> None:
+    pending = list(deps.prefetched.values())
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)  # retrieves any error, so nothing is logged
+
+
 def ticket_prompt(text: str, triage: Triage, requester_approved: bool) -> str:
     authority = "approved" if requester_approved else "NOT an approver for this request (checked by code)"
     return (
@@ -295,6 +335,7 @@ async def investigate(
         playbooks=prompt_text(list(triage.intents), domain),
     )
     agent = build_investigator(model)
+    await prefetch_sign_ins(deps, graph, triage)
 
     try:
         async with asyncio.timeout(timeout_s):
@@ -314,6 +355,7 @@ async def investigate(
     except ModelAPIError as exc:  # API down or a rejected request: don't leave the run in INVESTIGATING
         kind, reason = "model_api", str(exc)
     else:
+        await cancel_prefetches(deps)
         plan, usage = result.output, result.usage
         store.append_event(run_id, "plan", {
             "plan": plan.model_dump(mode="json", by_alias=True),
@@ -329,5 +371,6 @@ async def investigate(
         store.set_state(run_id, RunState.PLAN_PROPOSED)
         return Investigation("planned", plan, deps.recorder.findings, None, deps.transcript, deps.playbooks)
 
+    await cancel_prefetches(deps)
     store.set_state(run_id, RunState.ESCALATED, kind=kind, reason=reason, findings=deps.recorder.findings)
     return Investigation("escalated", None, deps.recorder.findings, reason, deps.transcript, deps.playbooks)
