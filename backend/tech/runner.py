@@ -208,9 +208,17 @@ async def start(rt: Runtime, run_id: int, text: str, from_address: str, *,
                                facts=rt.facts, domain=rt.domain, model=investigator_model,
                                clean_sign_ins_for=rt.clean_sign_ins_for)
     if result.outcome == "planned":
-        gate.check(rt.store, run_id, result.plan, requester_approved=check.approved, intents=triage.intents,
+        plan = result.plan
+        gate.check(rt.store, run_id, plan, requester_approved=check.approved, intents=triage.intents,
                    playbooks=result.playbooks, facts=rt.facts, transcript=result.transcript,
                    findings=result.findings)
+        if not plan.steps and plan.questions_for_requester and rt.store.get_run(run_id).state in (S.PLAN_CHECKED,
+                                                                                                  S.HELD):
+            # Nothing can be done before the requester answers (e.g. "rehire?"). There is no waiting-on-
+            # customer state yet (Week 5, with the PSA), so a technician takes the questions to them.
+            transition(rt.store, run_id, S.ESCALATED, kind="questions",
+                       reason="waiting on the requester: " + " ".join(plan.questions_for_requester),
+                       questions=plan.questions_for_requester, findings=result.findings)
     return await proceed(rt, run_id)
 
 

@@ -9,7 +9,9 @@ Each problem is one sentence the model can act on; a non-empty list goes back to
   3. In scope:  the action is allowed by a triaged intent's playbook, and a group add targets
                 a group the agent may change (see policy.group_problem).
   4. Covers DoD:         every required definition_of_done item has a step that could satisfy it,
-                         or is one the plan covers by listing it under needs_technician.
+                         or is one the plan covers by listing it under needs_technician. Waived when
+                         the plan pauses with questions_for_requester: it is partial on purpose (only
+                         what is safe before the answer, or nothing), and the gate still gates each step.
   5. Must-investigate:   every must_investigate tool was actually called in the transcript.
   6. Questions resolved: every questions_to_resolve topic is answered (an assumption or a
                          confirm_on_approval entry), or the plan pauses with questions_for_requester.
@@ -148,7 +150,8 @@ def lint(plan: Plan, transcript: Transcript, playbooks: dict[str, Playbook], fac
     if playbooks:
         actions = {s.action for s in plan.steps}
         for playbook in playbooks.values():
-            problems += _dod_problems(playbook, actions)
+            if not plan.questions_for_requester:
+                problems += _dod_problems(playbook, actions)
             problems += _must_investigate_problems(playbook, transcript)
             problems += _question_problems(playbook, plan)
     return problems

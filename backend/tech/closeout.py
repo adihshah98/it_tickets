@@ -1,6 +1,7 @@
 """Close-out (Tech.MD §4.8): what happens once every step has verified. The runner calls `close_out`.
 
-  1. DoD probes (code, execution/dod.py) against live state; each is a done_check event.
+  1. DoD probes (code, execution/dod.py) against live state; each is a done_check event. The DoD is every
+     triaged intent's playbook's, so a two-intent plan is checked on both halves.
   2. Sonnet drafts the reply and the PSA note (agents/closeout.py). A model error is an error event.
   3. The secret scanner checks each text against patterns and every secret the run holds (the TAP, the
      new user's password, link tokens). A hit blocks that text: message_blocked, with hit kinds and
@@ -29,7 +30,7 @@ from tech.core.store import RunState, Store, utcnow
 from tech.execution import dod, links
 from tech.graph.client import GraphClient
 from tech.graph.writes import Secrets
-from tech.playbooks import ClientFacts, load_playbooks
+from tech.playbooks import ClientFacts, Playbook, load_playbooks
 from tech.safety.scanner import scan
 
 WORK_TYPE = "AI Automation"
@@ -69,13 +70,26 @@ def record(store: Store, run_id: int, kind: str, *, to: str | None, subject: str
     return True
 
 
+def dod_playbook(playbooks: dict[str, Playbook]) -> Playbook | None:
+    """The plan's playbook, with the DoD items of every other triaged intent's playbook added (each probe
+    once). One plan can cover two intents (offboard Kevin, onboard his replacement); both halves are checked."""
+    if not playbooks:
+        return None
+    items: dict[str, dict] = {}
+    for p in playbooks.values():
+        for item in p.definition_of_done:
+            items.setdefault(next(iter(item)), item)
+    first = next(iter(playbooks.values()))
+    return first.model_copy(update={"definition_of_done": list(items.values())})
+
+
 async def close_out(store: Store, graph: GraphClient, run_id: int, plan: Plan, *, facts: ClientFacts, domain: str,
                     secrets: Secrets, model: Any = CLOSEOUT_MODEL,
                     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> list[str]:
     """Run the close-out for an executed run (state CLOSING). Returns the names of failed DoD probes."""
-    who = store.last_event(run_id, "triage").payload["triage"]["requester"]
-    requester = {"name": who["name"], "email": who["email"]}
-    playbook = load_playbooks([plan.intent], domain).get(plan.intent)
+    triage = store.last_event(run_id, "triage").payload["triage"]
+    requester = {"name": triage["requester"]["name"], "email": triage["requester"]["email"]}
+    playbook = dod_playbook(load_playbooks(list(dict.fromkeys([plan.intent, *triage["intents"]])), domain))
     ctx = dod.DodContext(store, graph, run_id, plan, facts, requester["email"], sleep=sleep)
 
     probes = await dod.check(ctx, playbook, exclude=("message_sent",)) if playbook else []

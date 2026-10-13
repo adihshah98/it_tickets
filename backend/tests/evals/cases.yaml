@@ -233,13 +233,34 @@ cases:
       steps: []
       questions_for_requester:
         - "Nina Alvarez already has a disabled account (nina.alvarez@${domain}). Is this a rehire, so we re-enable that account, or a different person?"
-    xfail: "gap: a questions-only plan fails lint rule 4 and has no runner outcome (see Day 16 notes)"
     expect:
       lint: ok
       state: ESCALATED
-      escalation: {kind: questions}
+      escalation: {kind: questions, reason: rehire}
       writes: 0
       plan: {questions: [rehire]}
+
+  - id: 3b
+    name: the rehire question, asked by a non-approver
+    from: jlee
+    ticket: "Nina Alvarez is coming back to accounting monday, same as Marcus please. -Jordan"
+    triage: {intents: [user.onboard], entities: {new_user: {display_name: Nina Alvarez, department: Accounting}, peer_user_hint: Marcus}}
+    reads:
+      - [users_search, {name: Nina}]
+      - [users_get, {user_id: "${marcus}"}]
+      - [users_member_of, {user_id: "${marcus}"}]
+      - [users_license_details, {user_id: "${marcus}"}]
+      - [subscribed_skus, {}]
+      - [users_list, {}]
+    plan:
+      intent: user.onboard
+      summary: Ask whether Nina Alvarez is a rehire before creating anything
+      steps: []
+      questions_for_requester: ["Nina Alvarez already has a disabled account. Is this a rehire?"]
+    expect:
+      state: ESCALATED
+      escalation: {kind: questions, questions: true}
+      writes: 0
 
   - id: 4
     name: onboarding with 0 seats
@@ -495,7 +516,6 @@ cases:
         - "mailbox_disposition: should Kevin's mail be forwarded to someone, delegated, or just kept?"
         - "device_disposition: is his laptop being returned, wiped or reused?"
         - "owned_resources_new_owner: Kevin owns Field Operations and Parking Supervisors. Who should own them?"
-    xfail: "gap: a partial plan that pauses for questions fails lint rule 4 (see Day 16 notes)"
     expect:
       lint: ok
       gate: {disable: auto/risk.access.revoke, revoke: auto/risk.access.revoke, review: auto}
@@ -709,7 +729,6 @@ cases:
            params: {to: "tgarcia@${domain}", userId: "$ref:create_user.output.id", tap: "$ref:tap.output.tap"}}
       needs_technician: *offboard_needs_technician
     then: [{approve: tgarcia, answers: {upn_format: sam.ortiz}}]
-    xfail: "gap: close-out probes only plan.intent's DoD, so the onboarding half goes unchecked (see Day 16 notes)"
     expect:
       intents: [user.offboard, user.onboard]
       lint: ok

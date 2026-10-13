@@ -97,6 +97,12 @@ def test_rule4_a_missing_dod_producer_is_flagged(transcript, playbooks, facts):
     assert any("definition of done 'message_sent'" in p for p in found)
 
 
+def test_rule4_a_pause_for_the_requester_may_be_partial(transcript, playbooks, facts):
+    # "Rehire?": nothing is done until the requester answers, so no step meets the DoD yet (eval #3).
+    data = {**ONBOARD_PLAN, "steps": [], "questions_for_requester": ["Is Priya a rehire?"]}
+    assert problems(Plan.model_validate(data), transcript, playbooks, facts) == []
+
+
 def test_rule4_a_structural_dod_item_needs_no_step(transcript, playbooks, facts):
     # needs_technician_listed is satisfied by the plan structure, not a write, so dropping no step for
     # it is fine; the good plan already passes, proving the structural item isn't demanded as a step.

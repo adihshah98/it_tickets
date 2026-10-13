@@ -140,3 +140,15 @@ def test_work_minutes_excludes_waiting_for_an_approver_and_mixes_naive_and_aware
               ("CLOSING", t0 + timedelta(minutes=31))]
     assert work_minutes(states, t0 + timedelta(minutes=31, seconds=20)) == 3  # 70 s + 60 s + 20 s -> 2.5 -> 3
     assert work_minutes([("CLOSING", t0)], t0) == 1
+
+
+def test_a_two_intent_run_is_checked_on_both_playbooks():
+    from tech.closeout import dod_playbook
+    from tech.playbooks import load_playbooks
+
+    merged = dod_playbook(load_playbooks(["user.offboard", "user.onboard"], DOMAIN))
+    names = [next(iter(item)) for item in merged.definition_of_done]
+    assert merged.intent == "user.offboard" and names[0] == "account_disabled"  # the plan's own playbook first
+    assert {"user_exists", "tap_active", "message_sent", "sessions_revoked"} <= set(names)
+    assert names.count("needs_technician_listed") == 1  # in both playbooks, probed once
+    assert dod_playbook({}) is None
