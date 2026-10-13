@@ -10,7 +10,12 @@ export function PlanSteps({ plan, steps }: { plan: Plan; steps: Step[] }) {
       aside={<span className="text-xs text-neutral-500">{counts.filter(([, n]) => n).map(([d, n]) => `${n} ${d}`).join(" · ")}</span>}
     >
       <p className="text-sm">{plan.summary}</p>
-      {plan.escalate && <p className="mt-2 text-sm font-semibold text-red-700">Escalating: {plan.escalation_reason}</p>}
+      {plan.escalate && (
+        <div className="mt-2 rounded bg-red-50 p-2 text-sm text-red-950">
+          <p className="font-semibold text-red-700">Escalating, nothing will be changed</p>
+          <p className="mt-1 whitespace-pre-wrap">{plan.escalation_reason}</p>
+        </div>
+      )}
       {plan.assumptions.length > 0 && (
         <details className="mt-2 text-sm">
           <summary className="cursor-pointer text-neutral-500">Assumptions ({plan.assumptions.length})</summary>

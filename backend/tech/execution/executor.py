@@ -11,7 +11,8 @@ For each step:
      own check decides, plus every key of the plan's `expected` that the read observed; other expected
      keys are listed as unchecked.
 
-Transient Graph errors are retried by the client (429, 5xx, replication lag). Anything else, a verify
+Transient Graph errors are retried by the client (429, 5xx, replication lag). Each wait, the client's or a
+verify poll's, is a step_retry event, which the workspace shows as "↻ retried". Anything else, a verify
 mismatch, or a Deviation stops the run with a step_failed event; the runner escalates it (no replanner
 until Week 3). Every payload passes `Secrets.guard` before it is appended.
 """
@@ -29,6 +30,7 @@ import logfire
 from tech.core.models import Plan, StepBase, parse_ref
 from tech.core.store import Store
 from tech.execution.catalogue import ACTIONS
+from tech.graph import client
 from tech.graph.client import GraphClient, GraphError
 from tech.graph.writes import Deviation, Secrets, StepContext, same
 from tech.safety.lint import params_of
@@ -122,6 +124,14 @@ class Execution:
         ctx = StepContext(graph=self.graph, store=self.store, run_id=self.run_id, step_id=step.id,
                           domain=self.domain, secrets=self.secrets, link_key=self.link_key, resumed=resumed,
                           sleep=self.sleep)
+        listener = client.on_retry.set(lambda reason, wait: self.emit("step_retry", base | {"reason": reason,
+                                                                                          "wait": wait}))
+        try:
+            return await self._run_step(step, spec, base, ctx, outputs)
+        finally:
+            client.on_retry.reset(listener)
+
+    async def _run_step(self, step, spec, base, ctx, outputs) -> tuple[bool, dict[str, Any], str | None]:
         with logfire.span("step {action}", action=step.action, step_id=step.id, run_id=self.run_id):
             try:
                 params = resolve(params_of(step), outputs)
@@ -154,6 +164,7 @@ class Execution:
         spec = ACTIONS[step.action]
         for delay in VERIFY_DELAYS:
             if delay:
+                self.emit("step_retry", {"step_id": step.id, "action": step.action, "reason": "verify", "wait": delay})
                 await self.sleep(delay)
             ok, observed = await spec.handler.verify(ctx, params, output)
             mismatches, unchecked = compare(step.expected, observed)

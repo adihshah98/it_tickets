@@ -67,8 +67,13 @@ def offboard_plan() -> Plan:
     })
 
 
+async def no_sleep(_: float) -> None:
+    pass
+
+
 async def dod(store, run_id, graph, plan):
-    ctx = DodContext(store, graph, run_id, plan, load_client_facts(DOMAIN), requester=f"tgarcia@{DOMAIN}")
+    ctx = DodContext(store, graph, run_id, plan, load_client_facts(DOMAIN), requester=f"tgarcia@{DOMAIN}",
+                     sleep=no_sleep)
     return {p.probe: p for p in await check(ctx, load_playbook("user.offboard", DOMAIN))}
 
 

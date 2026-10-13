@@ -41,6 +41,9 @@ export const getRun = (id: number) => call<Snapshot>(`/runs/${id}`);
 export const decide = (id: number, by: string, decision: "approve" | "reject", answers: Record<string, string>) =>
   call<{ state: string }>(`/runs/${id}/approval`, { by, decision, answers });
 
+/** The demo's "Manager confirmed via SMS" (mocked requester.confirmOutOfBand). */
+export const confirmOob = (id: number, by: string) => call<{ state: string }>(`/runs/${id}/oob`, { by });
+
 export const runNow = (followupId: number) =>
   call<{ followup_id: number; run_id: number }>(`/followups/${followupId}/run-now`, {});
 

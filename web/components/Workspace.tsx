@@ -75,7 +75,7 @@ export default function Workspace() {
       {snap.plan && <PlanSteps plan={snap.plan} steps={steps} />}
 
       {deciding && <ApprovalCard snap={snap} onDecided={refresh} />}
-      {snap.approval && <ApprovalSummary approval={snap.approval} />}
+      {snap.approval && <ApprovalSummary approval={snap.approval} oob={snap.oob} />}
 
       {executed && <Execution steps={steps} runs={view.steps} secs={view.executeSecs} />}
 
@@ -88,7 +88,7 @@ export default function Workspace() {
       {snap.followups.length > 0 && <Followups snap={snap} runs={view.steps} onStarted={reopen} />}
       {snap.links.length > 0 && <Links links={snap.links} />}
       {snap.plan && snap.plan.needs_technician.length > 0 && <NeedsTechnician items={snap.plan.needs_technician} />}
-      {snap.outcome && (state === "ESCALATED" || !deciding) && <Outcome outcome={snap.outcome} />}
+      {snap.outcome && (state === "ESCALATED" || !deciding) && <Outcome outcome={snap.outcome} planReason={snap.plan?.escalation_reason} />}
 
       {view.errors.map((e) => (
         <p key={e.seq} className="rounded bg-red-50 p-2 font-mono text-xs text-red-900">{e.where}: {e.error}</p>

@@ -827,11 +827,13 @@ Week 4
 - Learning new playbooks
 - Resolving ticket with no prior info
 
-Week 5 
+Week 5
 
-- PSA integration?
 - Expansions
-  - Pydantic-graph
+  - PSA integration?
+  - learning from the M365 unified audit log (SharePoint/Exchange changes) and from RMM script history;
+  - Things left from this plan/things left from overall plan
   - multi-tenant (so MSPs can have sep methods per customer)
+  - Pydantic-graph
   - Jev for decisions?
 

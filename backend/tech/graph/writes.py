@@ -87,7 +87,12 @@ class StepContext:
 
 def same(a: Any, b: Any) -> bool:
     """Loose equality for verify: case-insensitive for scalars (Graph echoes case-preserved UPNs, the model
-    writes 'true' or True)."""
+    writes 'true' or True). A scalar matches a list that holds it (the plan names one forward target, the
+    read returns all of them); two lists match as loose sets."""
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(any(same(x, y) for y in b) for x in a)
+    if isinstance(b, list) and not isinstance(a, dict):
+        return any(same(a, y) for y in b)
     if isinstance(a, (dict, list)) or isinstance(b, (dict, list)):
         return a == b
     return str(a).strip().casefold() == str(b).strip().casefold()

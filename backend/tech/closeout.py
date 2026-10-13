@@ -15,8 +15,10 @@ Returns the failed probes; the runner moves the run to DONE, or to ESCALATED wit
 
 from __future__ import annotations
 
+import asyncio
 import math
 import re
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
@@ -68,12 +70,13 @@ def record(store: Store, run_id: int, kind: str, *, to: str | None, subject: str
 
 
 async def close_out(store: Store, graph: GraphClient, run_id: int, plan: Plan, *, facts: ClientFacts, domain: str,
-                    secrets: Secrets, model: Any = CLOSEOUT_MODEL) -> list[str]:
+                    secrets: Secrets, model: Any = CLOSEOUT_MODEL,
+                    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> list[str]:
     """Run the close-out for an executed run (state CLOSING). Returns the names of failed DoD probes."""
     who = store.last_event(run_id, "triage").payload["triage"]["requester"]
     requester = {"name": who["name"], "email": who["email"]}
     playbook = load_playbooks([plan.intent], domain).get(plan.intent)
-    ctx = dod.DodContext(store, graph, run_id, plan, facts, requester["email"])
+    ctx = dod.DodContext(store, graph, run_id, plan, facts, requester["email"], sleep=sleep)
 
     probes = await dod.check(ctx, playbook, exclude=("message_sent",)) if playbook else []
     for p in probes:

@@ -28,6 +28,17 @@ export const SAMPLES = [
     from: "jlee",
     text: "Kevin Brooks's last day is today. Please shut off his access and send his email to Taylor.",
   },
+  {
+    label: "MFA reset (Dennis)",
+    from: "dennis",
+    text: "got a new phone and the authenticator app is gone, can't log in. can you reset it?",
+  },
+  {
+    label: "MFA reset reports@ (service account)",
+    from: "tgarcia",
+    text: "the reports@ account keeps asking for MFA and the parking app can't log in with it anymore. " +
+      "can you reset its MFA so the reports run again?",
+  },
 ] as const;
 
 export const senderName = (address: string) => {

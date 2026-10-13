@@ -2,6 +2,11 @@ import type { StepRun } from "@/lib/run";
 import type { Step } from "@/lib/types";
 import { KeyValues, Section } from "./ui";
 
+const WHY: Record<string, string> = {
+  replication: "waiting for the new account to replicate", verify: "waiting for the change to show up",
+  throttled: "Graph asked us to slow down", server_error: "Graph had a transient error",
+};
+
 const ICON = { pending: "○", running: "◌", verified: "✔", skipped: "⤼", failed: "✖" } as const;
 const COLOR = {
   pending: "text-neutral-400", running: "text-indigo-600 animate-pulse", verified: "text-emerald-600",
@@ -16,7 +21,7 @@ export function Execution({ steps, runs, secs }: { steps: Step[]; runs: Record<s
         {steps.map((s) => {
           const run = runs[s.id];
           const status = run?.status ?? s.status;
-          const retried = (run?.attempts ?? 0) > 1;
+          const retries = (run?.retries ?? 0) + Math.max(0, (run?.attempts ?? 0) - 1);
           return (
             <li key={s.id} className="text-sm">
               <div className="flex flex-wrap items-center gap-2">
@@ -29,7 +34,14 @@ export function Execution({ steps, runs, secs }: { steps: Step[]; runs: Record<s
                   {status === "running" && "running…"}
                   {status === "failed" && "failed"}
                 </span>
-                {retried && <span className="text-xs font-semibold text-amber-700">↻ retried ×{run!.attempts - 1}</span>}
+                {retries > 0 && (
+                  <span className="text-xs font-semibold text-amber-700" title={run!.retryReasons.map((r) => WHY[r] ?? r).join("; ")}>
+                    ↻ retried ×{retries}
+                    {run!.waited > 0 && (
+                      <span className="font-normal"> · {run!.retryReasons.map((r) => WHY[r] ?? r).join(", ")} ({run!.waited.toFixed(0)} s)</span>
+                    )}
+                  </span>
+                )}
                 {run?.t != null && <span className="ml-auto font-mono text-xs text-neutral-400">{run.t.toFixed(1)}s</span>}
               </div>
               {status === "failed" && (

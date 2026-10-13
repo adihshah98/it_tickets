@@ -21,6 +21,10 @@ export interface StepRun {
   t: number | null;
   /** Ran outside the main execution, i.e. a follow-up's "run now". */
   followup: boolean;
+  /** Waits inside one attempt: the Graph client's backoff (replication lag, throttling) and verify polls. */
+  retries: number;
+  waited: number;
+  retryReasons: string[];
 }
 
 export interface View {
@@ -56,6 +60,7 @@ function step(view: View, p: P, change: (prev: StepRun | undefined) => Partial<S
   const followup = prev?.followup ?? view.state !== "EXECUTING";
   const fresh: StepRun = {
     stepId: id, action: String(p.action), attempts: 0, status: "running", error: null, skipped: null, t: null, followup,
+    retries: 0, waited: 0, retryReasons: [],
   };
   const next: StepRun = { ...(prev ?? fresh), followup, ...change(prev) };
   if (typeof p.t === "number") next.t = p.t;
@@ -96,6 +101,11 @@ export function reduce(view: View, event: RunEvent): View {
       };
     case "step_started":
       return step(base, p, (prev) => ({ status: "running", attempts: (prev?.attempts ?? 0) + 1, error: null }));
+    case "step_retry":
+      return step(base, p, (prev) => ({
+        retries: (prev?.retries ?? 0) + 1, waited: (prev?.waited ?? 0) + num(p.wait),
+        retryReasons: [...new Set([...(prev?.retryReasons ?? []), String(p.reason)])],
+      }));
     case "step_verified":
       return step(base, p, (prev) => ({
         status: p.skipped ? "skipped" : "verified", skipped: (p.skipped as string) ?? null,
@@ -117,10 +127,17 @@ export function reduce(view: View, event: RunEvent): View {
  * prose (e.g. "2026-10-12; license assigned at 11:00 UTC"), which the API would refuse as an answer. */
 export const ANSWER_KEYS = ["upn_format", "start_date"] as const;
 
-export function answersFor(confirmations: Confirmation[], edits: Record<string, string>): Record<string, string> {
+/** The answers a plan can take: both are about a new hire, so only a plan with one user.create step.
+ * (The model sometimes tags another plan's question start_date, e.g. "cut off access now?".) */
+export function answerable(steps: { action: string }[]): readonly string[] {
+  return steps.filter((s) => s.action === "user.create").length === 1 ? ANSWER_KEYS : [];
+}
+
+export function answersFor(confirmations: Confirmation[], edits: Record<string, string>,
+                           allowed: readonly string[] = ANSWER_KEYS): Record<string, string> {
   const answers: Record<string, string> = {};
   for (const c of confirmations) {
-    if (!(ANSWER_KEYS as readonly string[]).includes(c.key) || edits[c.key] === undefined) continue;
+    if (!allowed.includes(c.key) || edits[c.key] === undefined) continue;
     const value = edits[c.key].trim();
     if (value && value !== c.proposed.trim()) answers[c.key] = value;
   }

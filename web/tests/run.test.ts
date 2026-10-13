@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { answersFor, initialView, reduce, REFRESH_ON, type View } from "../lib/run";
+import { answerable, answersFor, initialView, reduce, REFRESH_ON, type View } from "../lib/run";
 import type { Confirmation, RunEvent } from "../lib/types";
 
 /** Parse a captured `curl -N /runs/{id}/events` body the way EventSource does (id / event / data lines). */
@@ -77,6 +77,15 @@ describe("step attempts", () => {
     expect(view.steps.add).toMatchObject({ status: "skipped", skipped: "already true", attempts: 1 });
   });
 
+  it("counts the client's and the verify poll's waits as retries", () => {
+    const retry = (seq: number, reason: string, wait: number) =>
+      ev(seq, "step_retry", { step_id: "add", action: "group.addMember", reason, wait, t: seq });
+    const view = replay([started(2), retry(3, "replication", 4), retry(4, "replication", 8), retry(5, "verify", 2),
+                        ev(6, "step_verified", { step_id: "add", action: "group.addMember", t: 6 })], executing);
+    expect(view.steps.add).toMatchObject({ attempts: 1, status: "verified", retries: 3, waited: 14,
+                                           retryReasons: ["replication", "verify"] });
+  });
+
   it("keeps a failure's error", () => {
     const view = replay([started(2), ev(3, "step_failed", { step_id: "add", action: "group.addMember", error: "verify failed" })],
                         executing);
@@ -108,6 +117,13 @@ describe("answersFor", () => {
     expect(answersFor(confirmations, { upn_format: "  pnair ", start_date: " ", license_purchase: "no", other: "x" }))
       .toEqual({ upn_format: "pnair" });
     expect(answersFor(confirmations, { start_date: "2026-10-13" })).toEqual({ start_date: "2026-10-13" });
+  });
+
+  it("takes no answers on a plan without a new hire", () => {
+    const offboard = [{ action: "user.update" }, { action: "followup.schedule" }];
+    expect(answerable(offboard)).toEqual([]);
+    expect(answerable([{ action: "user.create" }, ...offboard])).toContain("start_date");
+    expect(answersFor(confirmations, { start_date: "end of day" }, answerable(offboard))).toEqual({});
   });
 });
 

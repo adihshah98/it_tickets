@@ -11,7 +11,7 @@ GRAPH_PROBES = ["user_exists", "user_property", "user_has_sku", "user_in_groups"
 
 
 def ctx(rt, run_id, plan, requester=TAYLOR):
-    return dod.DodContext(rt.store, rt.graph, run_id, plan, rt.facts, requester)
+    return dod.DodContext(rt.store, rt.graph, run_id, plan, rt.facts, requester, sleep=rt.sleep)
 
 
 def playbook():
@@ -40,6 +40,25 @@ async def test_a_missing_group_fails_user_in_groups(rt, executed, tenant):
 
     probe = by_name(await dod.check(ctx(rt, run_id, plan), playbook(), only=("user_in_groups",)))["user_in_groups"]
     assert not probe.ok and FINANCE_FILES in probe.detail
+
+
+async def test_user_in_groups_rereads_while_the_directory_lags(rt, executed, tenant, sleeps):
+    run_id, plan = await executed()
+    tenant.stale_member_reads = 2  # verify saw the memberships; the probe's first two reads don't (rehearsal run 9)
+    sleeps.clear()
+
+    probe = (await dod.check(ctx(rt, run_id, plan), playbook(), only=("user_in_groups",)))[0]
+    assert probe.ok, probe.detail
+    assert sleeps == [2.0, 4.0]
+
+
+async def test_a_missing_group_still_fails_after_the_rereads(rt, executed, tenant, sleeps):
+    run_id, plan = await executed()
+    tenant.members[FINANCE_FILES].discard(priya(tenant))
+    sleeps.clear()
+
+    assert not (await dod.check(ctx(rt, run_id, plan), playbook(), only=("user_in_groups",)))[0].ok
+    assert sleeps == [2.0, 4.0, 8.0]  # bounded: about 14 s, then it fails as before
 
 
 async def test_no_license_and_no_follow_up_fails(rt, executed):

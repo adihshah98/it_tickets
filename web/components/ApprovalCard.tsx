@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { ApiError, decide } from "@/lib/api";
-import { ANSWER_KEYS, answersFor } from "@/lib/run";
+import { ApiError, confirmOob, decide } from "@/lib/api";
+import { answerable, answersFor } from "@/lib/run";
 import { APPROVERS, senderName } from "@/lib/samples";
 import type { Snapshot } from "@/lib/types";
-import { DecisionLabel, KeyValues, Section } from "./ui";
+import { DecisionLabel, KeyValues, Section, when } from "./ui";
 
 /** One card for the whole plan: the risky steps, the confirm questions, and approve / reject. */
 export function ApprovalCard({ snap, onDecided }: { snap: Snapshot; onDecided: () => void }) {
@@ -15,17 +15,19 @@ export function ApprovalCard({ snap, onDecided }: { snap: Snapshot; onDecided: (
   const blocked = steps.filter((s) => s.decision === "block");
   const autoCount = steps.filter((s) => s.decision === "auto").length;
   const held = snap.run.state === "HELD";
+  const oobPending = snap.oob.needed && !snap.oob.confirmed;
+  const allowed = answerable(steps);
 
   const [by, setBy] = useState<string>(APPROVERS[0]);
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
 
-  async function submit(decision: "approve" | "reject") {
+  async function act(call: () => Promise<unknown>) {
     setBusy(true);
     setRefusal(null);
     try {
-      await decide(snap.run.id, by, decision, answersFor(plan.confirm_on_approval, edits));
+      await call();
       onDecided();
     } catch (e) {
       setRefusal(e instanceof ApiError ? e.detail : String(e));
@@ -33,6 +35,8 @@ export function ApprovalCard({ snap, onDecided }: { snap: Snapshot; onDecided: (
       setBusy(false);
     }
   }
+  const submit = (decision: "approve" | "reject") =>
+    act(() => decide(snap.run.id, by, decision, answersFor(plan.confirm_on_approval, edits, allowed)));
 
   return (
     <Section title="Approval" tone="warn">
@@ -41,6 +45,31 @@ export function ApprovalCard({ snap, onDecided }: { snap: Snapshot; onDecided: (
           <span className="font-semibold">Held:</span> {senderName(snap.ticket.from)} isn&apos;t an approved requester for this.
           An approver must release it.
         </p>
+      )}
+      {snap.oob.needed && (
+        <div className={`mb-3 rounded border p-2 text-sm ${oobPending ? "border-amber-400 bg-amber-50" : "border-emerald-300 bg-emerald-50"}`}>
+          <p className="font-semibold">Identity check first</p>
+          {oobPending ? (
+            <>
+              <p>
+                Before any credential change, confirm the request with {senderName(snap.ticket.from)}&apos;s manager on
+                the number already on file. A caller asking for an MFA reset is a common social-engineering path.
+              </p>
+              <button
+                type="button" disabled={busy} onClick={() => act(() => confirmOob(snap.run.id, by))}
+                className="mt-2 rounded bg-amber-600 px-3 py-1 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-40"
+              >
+                Manager confirmed via SMS
+              </button>
+              <span className="ml-2 text-xs text-neutral-500">(mocked: no SMS is sent)</span>
+            </>
+          ) : (
+            <p className="text-emerald-800">
+              ✔ {snap.oob.confirmed!.contact} confirmed via {snap.oob.confirmed!.via.toUpperCase()} ·
+              recorded by {senderName(snap.oob.confirmed!.by)} {when(snap.oob.confirmed!.at)}
+            </p>
+          )}
+        </div>
       )}
       {blocked.length > 0 && (
         <div className="mb-3 rounded bg-red-50 p-2 text-sm text-red-900">
@@ -70,7 +99,7 @@ export function ApprovalCard({ snap, onDecided }: { snap: Snapshot; onDecided: (
         <div className="mt-4 space-y-3">
           <h3 className="text-sm font-semibold">Please confirm</h3>
           {plan.confirm_on_approval.map((c) => {
-            const editable = (ANSWER_KEYS as readonly string[]).includes(c.key);
+            const editable = allowed.includes(c.key);
             return (
               <div key={c.key + c.question} className="text-sm">
                 <p className="font-medium">{c.question}</p>
@@ -105,7 +134,7 @@ export function ApprovalCard({ snap, onDecided }: { snap: Snapshot; onDecided: (
           </select>
         </label>
         <button
-          type="button" disabled={busy || blocked.length > 0} onClick={() => submit("approve")}
+          type="button" disabled={busy || blocked.length > 0 || oobPending} onClick={() => submit("approve")}
           className="rounded bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-40"
         >
           {held ? "Release and approve" : "Approve plan"}
@@ -122,10 +151,11 @@ export function ApprovalCard({ snap, onDecided }: { snap: Snapshot; onDecided: (
   );
 }
 
-export function ApprovalSummary({ approval }: { approval: NonNullable<Snapshot["approval"]> }) {
+export function ApprovalSummary({ approval, oob }: { approval: NonNullable<Snapshot["approval"]>; oob: Snapshot["oob"] }) {
   const answers = Object.entries(approval.answers);
   return (
     <p className="text-sm text-neutral-600">
+      {oob.confirmed && <>✔ {oob.confirmed.contact} confirmed via {oob.confirmed.via.toUpperCase()} · </>}
       {approval.decision === "approve" ? "✔ Approved" : "✖ Rejected"} by {senderName(approval.by)}
       {approval.released_hold && " (released the hold)"}
       {answers.length > 0 && <> · confirmed {answers.map(([k, v]) => `${k} = ${v}`).join(", ")}</>}

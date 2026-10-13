@@ -91,14 +91,44 @@ export function NeedsTechnician({ items }: { items: Plan["needs_technician"] }) 
   );
 }
 
-export function Outcome({ outcome }: { outcome: NonNullable<Snapshot["outcome"]> }) {
-  const { from, to, kind, reason, findings, ...rest } = outcome;
+const strings = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
+
+/** The hand-off package (Tech.MD §9): why, what the agent found, what's done, what failed, what can be undone. */
+export function Outcome({ outcome, planReason }: { outcome: NonNullable<Snapshot["outcome"]>; planReason?: string | null }) {
+  const { from, to, kind, reason, findings, done, failed_step, failed_probes, rollback, ...rest } = outcome;
   void from;
-  void findings;
+  const evidence = strings(findings);
+  const finished = strings(done);
+  const probes = strings(failed_probes);
+  const undo = Array.isArray(rollback) ? (rollback as { step_id: string; action: string; compensate: string | null }[]) : [];
   return (
     <Section title={to === "HELD" ? "Held" : "Escalated to a technician"} tone={to === "HELD" ? "warn" : "bad"}>
       {kind && <p className="font-mono text-xs text-neutral-500">{kind}</p>}
-      {reason && <p className="text-sm">{reason}</p>}
+      {reason && (reason === planReason
+        ? <p className="text-sm">The agent escalated instead of planning; its reasoning is in the plan above.</p>
+        : <p className="text-sm">{reason}</p>)}
+      {evidence.length > 0 && (
+        <div className="mt-3 text-sm">
+          <h3 className="font-semibold">What it found</h3>
+          <ul className="ml-5 list-disc">{evidence.map((f) => <li key={f}>{f}</li>)}</ul>
+        </div>
+      )}
+      {(finished.length > 0 || typeof failed_step === "string") && (
+        <p className="mt-3 text-sm">
+          {finished.length > 0 && <>Done: <span className="font-mono">{finished.join(", ")}</span>. </>}
+          {typeof failed_step === "string" && <>Stopped at <span className="font-mono">{failed_step}</span>.</>}
+        </p>
+      )}
+      {probes.length > 0 && <p className="mt-3 text-sm">Not met: <span className="font-mono">{probes.join(", ")}</span></p>}
+      {undo.length > 0 && (
+        <div className="mt-3 text-sm">
+          <h3 className="font-semibold">Can be rolled back</h3>
+          <p className="text-xs text-neutral-500">offered to the technician, never run automatically</p>
+          <ul className="ml-5 list-disc font-mono text-xs">
+            {undo.map((u) => <li key={u.step_id}>{u.step_id} ({u.action}) → {u.compensate ?? "no automatic undo"}</li>)}
+          </ul>
+        </div>
+      )}
       {Object.keys(rest).length > 0 && <div className="mt-2"><KeyValues values={rest} /></div>}
     </Section>
   );

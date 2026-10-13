@@ -7,12 +7,16 @@ step's output, the plan's group.addMember steps, the investigation's memberOf re
 point a probe at something the run didn't do. Only `$client.<field>` is resolved, from the client facts.
 
 A probe never raises: a Graph error, or a DoD item with no probe, is a failed check.
+
+Membership and ownership reads are eventually consistent: a read just after the step verified can still
+show the old state. Those probes re-read on SETTLE_DELAYS before they fail, like the executor's verify.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Collection
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from tech.core.models import Plan
@@ -25,6 +29,7 @@ from tech.playbooks import ClientFacts, Playbook
 
 NO_USER = "no user.create step verified in this run"
 INACTIVE_TAP = {"Expired", "DisabledByPolicy", "OneTimeUsed"}
+SETTLE_DELAYS = (2.0, 4.0, 8.0)  # about 14 s more, after the first read
 
 
 @dataclass(frozen=True)
@@ -45,6 +50,17 @@ class DodContext:
     plan: Plan
     facts: ClientFacts
     requester: str
+    sleep: Callable[[float], Awaitable[None]] = field(default=asyncio.sleep)
+
+    async def settled[T](self, read: Callable[[], Awaitable[T]], ok: Callable[[T], bool]) -> T:
+        """`read()` until `ok` holds or SETTLE_DELAYS run out; the last value either way."""
+        value = await read()
+        for delay in SETTLE_DELAYS:
+            if ok(value):
+                break
+            await self.sleep(delay)
+            value = await read()
+        return value
 
     def new_user(self) -> dict[str, Any] | None:
         """The user.create step's output in this run: {id, userPrincipalName}."""
@@ -159,7 +175,7 @@ async def user_in_groups(ctx: DodContext, args: dict[str, Any]) -> Probe:
         return Probe("user_in_groups", False, NO_USER)
     if not (want := ctx.mirrored_groups()):
         return Probe("user_in_groups", True, "the plan mirrors no groups")
-    have = await member_group_ids(ctx.graph, user["id"])
+    have = await ctx.settled(lambda: member_group_ids(ctx.graph, user["id"]), lambda ids: set(want) <= ids)
     missing = [f"{name} ({gid})" if name.lower() != gid else gid for gid, name in want.items() if gid not in have]
     return Probe("user_in_groups", not missing, f"not in {', '.join(missing)}" if missing else f"in all {len(want)}")
 
@@ -267,7 +283,7 @@ async def removed_from_groups(ctx: DodContext, args: dict[str, Any]) -> Probe:
         return Probe("removed_from_groups", False, NO_LEAVER)
     if not (want := ctx.removed_groups()):
         return Probe("removed_from_groups", True, "the plan removes no groups")
-    still_in = await member_group_ids(ctx.graph, leaver)
+    still_in = await ctx.settled(lambda: member_group_ids(ctx.graph, leaver), lambda ids: not set(want) & ids)
     bad = [name for gid, name in want.items() if gid in still_in]
     return Probe("removed_from_groups", not bad,
                  f"still in {', '.join(bad)}" if bad else f"removed from all {len(want)}")
@@ -279,8 +295,10 @@ async def ownership_transferred(ctx: DodContext, args: dict[str, Any]) -> Probe:
         return Probe("ownership_transferred", True, "the plan transfers no ownership")
     missing = []
     for gid, new_owner in want.items():
-        owners = {o["id"].lower() async for o in ctx.graph.list(f"/groups/{gid}/owners", {"$select": "id"})}
-        if new_owner.lower() not in owners:
+        async def owners(gid: str = gid) -> set[str]:
+            return {o["id"].lower() async for o in ctx.graph.list(f"/groups/{gid}/owners", {"$select": "id"})}
+
+        if new_owner.lower() not in await ctx.settled(owners, lambda ids, o=new_owner: o.lower() in ids):
             missing.append(gid)
     return Probe("ownership_transferred", not missing,
                  f"new owner missing on {', '.join(missing)}" if missing else f"transferred {len(want)}")

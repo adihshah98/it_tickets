@@ -58,6 +58,14 @@ async def test_the_start_date_answer_moves_the_follow_up(rt, gated, tenant):
     assert followup.run_at.date().isoformat() == "2026-10-19" and followup.run_at.hour == 10
 
 
+def test_a_start_date_answer_needs_a_new_hire():
+    # an offboarding plan tagged its "cut off access now?" question start_date (rehearsal run 12); a date
+    # there would silently move the 30-day license review
+    plan = plan_with(drop=("create_user", "buy_seat", "add_accounting", "add_finance_files", "tap", "send_link"))
+    with pytest.raises(RunError, match="user.create"):
+        runner.apply_answers(plan, {"start_date": "2026-10-13"}, DOMAIN)
+
+
 async def test_unknown_or_bad_answers_are_refused_before_anything_is_recorded(rt, gated, tenant):
     run_id = gated()
     for answers in ({"password": "x"}, {"start_date": "next monday"}, {"upn_format": "priya nair"}):

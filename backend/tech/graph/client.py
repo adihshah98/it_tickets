@@ -6,6 +6,9 @@ Retry policy is Tech.MD §4.6, owned by code, never the model:
   - Replication lag (404, or 400 "...does not exist..." on an object we just created):
     only when the caller passes retry_replication=True; 5 tries, backoff over about a minute.
   - Anything else (403, other 400s): raise immediately.
+
+Each wait is reported to the `on_retry` listener of the current context (the executor sets it per step,
+so the workspace can show "↻ retried"). A context variable, because concurrent runs share one client.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextvars import ContextVar
 from typing import Any
 
 import httpx
@@ -25,6 +29,8 @@ THROTTLE_TRIES = 6
 SERVER_ERROR_TRIES = 3
 REPLICATION_DELAYS = (4.0, 8.0, 16.0, 32.0)  # 5 tries, 60 s of waiting in total
 TOKEN_REFRESH_MARGIN = 300
+
+on_retry: ContextVar[Callable[[str, float], None] | None] = ContextVar("on_retry", default=None)
 
 
 class GraphError(RuntimeError):
@@ -94,14 +100,14 @@ class GraphClient:
             )
             if resp.status_code == 429 and throttled < THROTTLE_TRIES - 1:
                 throttled += 1
-                await self._sleep(float(resp.headers.get("Retry-After", 2**throttled)))
+                await self._wait("throttled", float(resp.headers.get("Retry-After", 2**throttled)))
                 continue
             if resp.status_code in (500, 502, 503, 504) and server_errors < SERVER_ERROR_TRIES - 1:
                 server_errors += 1
-                await self._sleep(2.0**server_errors)
+                await self._wait("server_error", 2.0**server_errors)
                 continue
             if retry_replication and is_replication_lag(resp) and replication < len(REPLICATION_DELAYS):
-                await self._sleep(REPLICATION_DELAYS[replication])
+                await self._wait("replication", REPLICATION_DELAYS[replication])
                 replication += 1
                 continue
             if resp.is_error:
@@ -109,6 +115,11 @@ class GraphClient:
             if resp.content and "json" in resp.headers.get("content-type", ""):
                 return resp.json()
             return None
+
+    async def _wait(self, reason: str, seconds: float) -> None:
+        if (listener := on_retry.get()) is not None:
+            listener(reason, seconds)
+        await self._sleep(seconds)
 
     async def get(self, path: str, **kw: Any) -> Any:
         return await self.request("GET", path, **kw)

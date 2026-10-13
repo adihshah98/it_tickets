@@ -166,12 +166,13 @@ def apply_answers(plan: Plan, answers: dict[str, str], domain: str) -> Plan:
         raise RunError(f"unknown answer {sorted(unknown)}; answers can set {', '.join(ANSWER_KEYS)}")
     data = plan.model_dump(mode="json", by_alias=True)
     steps = data["steps"]
+    creates = [s for s in steps if s["action"] == "user.create"]
+    if answers and len(creates) != 1:  # both answers are about a new hire; another plan can't take them
+        raise RunError(f"{', '.join(sorted(answers))} needs exactly one user.create step, the plan has "
+                       f"{len(creates)}")
 
     if upn := answers.get("upn_format"):
         upn = upn.strip() if "@" in upn else f"{upn.strip()}@{domain}"
-        creates = [s for s in steps if s["action"] == "user.create"]
-        if len(creates) != 1:
-            raise RunError(f"upn_format needs exactly one user.create step, the plan has {len(creates)}")
         params = creates[0]["params"]
         old = {params["userPrincipalName"].casefold(): upn, params["mailNickname"].casefold(): upn.split("@")[0]}
         params["userPrincipalName"], params["mailNickname"] = upn, upn.split("@")[0]
@@ -295,7 +296,7 @@ async def execute(rt: Runtime, run_id: int, plan: Plan) -> None:
     if result.ok:
         transition(rt.store, run_id, S.CLOSING)
         failed = await closeout.close_out(rt.store, rt.graph, run_id, plan, facts=rt.facts, domain=rt.domain,
-                                          secrets=execution.secrets, model=rt.closeout_model)
+                                          secrets=execution.secrets, model=rt.closeout_model, sleep=rt.sleep)
         if failed:
             transition(rt.store, run_id, S.ESCALATED, kind="dod",
                        reason=f"definition of done not met: {', '.join(failed)}", failed_probes=failed,

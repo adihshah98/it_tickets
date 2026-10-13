@@ -151,7 +151,12 @@ def snapshot(store: Store, run_id: int, web_origin: str, domain: str) -> dict[st
     approval = store.last_event(run_id, "approval")
 
     plan = steps = None
+    oob = {"needed": False, "confirmed": None}
     if plan_event is not None:
+        oob["needed"] = runner.needs_oob(store, run_id, runner.load_plan(store, run_id))
+        if confirmed := store.last_event(run_id, "oob_confirmed"):
+            oob["confirmed"] = {k: confirmed.payload[k] for k in ("by", "contact", "via")} | {
+                "at": confirmed.created_at.isoformat()}
         try:
             effective = runner.effective_plan(store, run_id, domain)
         except runner.RunError:  # answers that no longer fit; show the plan as proposed
@@ -188,6 +193,7 @@ def snapshot(store: Store, run_id: int, web_origin: str, domain: str) -> dict[st
         "plan": plan,
         "steps": steps,
         "approval": approval.payload if approval else None,
+        "oob": oob,
         "outcome": outcome,
         "followups": [{"id": f.id, "step_id": f.step_id, "kind": f.kind, "run_at": f.run_at.isoformat(),
                        "status": f.status} for f in scheduler.for_run(store, run_id)],

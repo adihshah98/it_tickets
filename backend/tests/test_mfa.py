@@ -87,7 +87,8 @@ def mfa_run(rt):
 
 
 async def dod(store, run_id, graph, plan, requester=DENNIS_UPN):
-    ctx = DodContext(store, graph, run_id, plan, load_client_facts(DOMAIN), requester=requester)
+    ctx = DodContext(store, graph, run_id, plan, load_client_facts(DOMAIN), requester=requester,
+                     sleep=no_sleep)
     return {p.probe: p for p in await check(ctx, load_playbook("mfa.reset", DOMAIN))}
 
 
@@ -200,9 +201,12 @@ async def test_the_api_button_confirms_then_approval_runs(rt, mfa_run, seeded):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://api.test") as client:
         refused = await client.post(f"/runs/{run_id}/approval", json={"by": "tgarcia"})
         assert refused.status_code == 409 and "out-of-band" in refused.json()["detail"]
+        assert (await client.get(f"/runs/{run_id}")).json()["oob"] == {"needed": True, "confirmed": None}
         assert (await client.post(f"/runs/{run_id}/oob", json={"by": "tgarcia"})).json() == {
             "state": "AWAITING_APPROVAL"}
         assert (await client.post(f"/runs/{run_id}/oob", json={"by": "tgarcia"})).status_code == 409  # twice
+        confirmed = (await client.get(f"/runs/{run_id}")).json()["oob"]["confirmed"]
+        assert confirmed | {"at": None} == {"by": TECH.lower(), "contact": "manager", "via": "sms", "at": None}
         assert (await client.post(f"/runs/{run_id}/approval", json={"by": "tgarcia"})).status_code == 202
         await app.state.tasks.drain()
     assert seeded.auth_methods[DENNIS] == []

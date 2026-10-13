@@ -112,6 +112,7 @@ async def test_snapshot_of_a_run_awaiting_approval(client, rt, gated):
     assert decisions["create_user"] == "auto"
     assert all(s["status"] == "pending" and s["rule_id"] for s in snap["steps"])
     assert snap["approval"] is None and snap["outcome"] is None
+    assert snap["oob"] == {"needed": False, "confirmed": None}  # onboarding has no out-of-band check
 
 
 # ------------------------------------------------------------------ approval

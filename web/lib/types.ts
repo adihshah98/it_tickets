@@ -77,6 +77,8 @@ export interface Snapshot {
   plan: Plan | null;
   steps: Step[] | null;
   approval: { by: string; decision: "approve" | "reject"; answers: Record<string, string>; released_hold: boolean } | null;
+  /** MFA reset: whether a credential step needs the subject confirmed out of band first, and the confirmation. */
+  oob: { needed: boolean; confirmed: { by: string; contact: string; via: string; at: string } | null };
   outcome: ({ from: RunState; to: RunState; kind?: string; reason?: string } & Record<string, unknown>) | null;
   followups: { id: number; step_id: string; kind: string; run_at: string; status: string }[];
   links: { id: number; step_id: string; to: string; expires_at: string; viewed_at: string | null; url: string | null }[];

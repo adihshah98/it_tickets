@@ -74,6 +74,9 @@ async def test_a_new_user_404_on_group_add_is_retried_not_a_deviation(execution,
 
     assert (await execution.run(plan_with())).ok
     assert sleeps[:2] == [4.0, 8.0]                              # the client's replication backoff
+    retries = [e.payload for e in store.events_of(run_id, "step_retry")]
+    assert [(r["step_id"], r["reason"], r["wait"]) for r in retries] == [
+        ("add_accounting", "replication", 4.0), ("add_accounting", "replication", 8.0)]  # the UI's ↻ retried
 
 
 async def test_verify_polls_while_the_directory_lags(execution, store, run_id, tenant, sleeps):
@@ -85,6 +88,8 @@ async def test_verify_polls_while_the_directory_lags(execution, store, run_id, t
     assert result.ok
     assert sleeps == [2.0, 4.0]
     assert not types(store, run_id, "step_failed")
+    assert [(r.payload["reason"], r.payload["wait"]) for r in store.events_of(run_id, "step_retry")] == [
+        ("verify", 2.0), ("verify", 4.0)]
 
 
 async def test_an_existing_user_not_created_by_this_run_is_a_deviation(execution, store, run_id, tenant):
@@ -171,6 +176,15 @@ def test_order_rejects_a_cycle():
 def test_compare_checks_known_keys_and_lists_the_rest():
     assert compare({"usageLocation": "us", "accountEnabled": "true", "licensed": True},
                    {"usageLocation": "US", "accountEnabled": True}) == ([], ["licensed"])
+
+
+def test_compare_finds_an_expected_value_in_an_observed_list():
+    # the plan expects one forward target; the rule read returns all of them (rehearsal run 12)
+    to = ["tgarcia@NorthwindParking.onmicrosoft.com"]
+    assert compare({"forwardTo": "tgarcia@northwindparking.onmicrosoft.com"}, {"forwardTo": to}) == ([], [])
+    assert compare({"forwardTo": [f"tgarcia@{DOMAIN}".upper()]}, {"forwardTo": to}) == ([], [])
+    assert compare({"forwardTo": "jlee@x.test"}, {"forwardTo": to})[0]
+    assert compare({"forwardTo": []}, {"forwardTo": to})[0]
 
 
 def test_the_guard_refuses_a_payload_with_a_secret():
