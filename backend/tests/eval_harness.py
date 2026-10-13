@@ -178,6 +178,10 @@ def load_cases() -> list[dict[str, Any]]:
     return yaml.safe_load(CASES_FILE.read_text())["cases"]
 
 
+def load_case(case_id: int | str) -> dict[str, Any]:
+    return next(c for c in load_cases() if str(c["id"]) == str(case_id))
+
+
 def plan_data(raw: dict[str, Any]) -> dict[str, Any]:
     """The recorded plan, with the step fields a recording leaves out filled in: depends_on, rationale,
     expected and the catalogue's risk class (the gate recomputes it anyway)."""
@@ -389,8 +393,9 @@ def plan_problems(want: dict[str, Any], plan: dict[str, Any] | None) -> list[str
 # ------------------------------------------------------------------ the offline tier
 
 
-async def run_case(case: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
-    """Run one case offline. Returns (problems, a summary for the failure message)."""
+async def run_case(case: dict[str, Any]) -> tuple[list[str], dict[str, Any], Store, int]:
+    """Run one case offline. Returns (problems, a summary for the failure message, the store, the run id):
+    the store lets other tests start from a case's finished run (e.g. learning from it)."""
     tenant = FakeTenant(DOMAIN)
     ids = seed(tenant)
     case = fill(case, ids)
@@ -425,7 +430,7 @@ async def run_case(case: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
     problems = refused + check(case, case.get("expect", {}), store, run_id, tenant, after_start, plan, ids)
     if case.get("expect", {}).get("library_unchanged") and (after := library_state(rt.library)) != library_before:
         problems.append(f"the playbook library changed: {library_before!r} -> {after!r}")
-    return problems, summarize(store, run_id)
+    return problems, summarize(store, run_id), store, run_id
 
 
 async def act(rt: runner.Runtime, run_id: int, case: dict[str, Any]) -> list[str]:
@@ -467,7 +472,7 @@ def case_params() -> list:
 
 @pytest.mark.parametrize("case", case_params())
 async def test_offline(case):
-    problems, summary = await run_case(case)
+    problems, summary, _, _ = await run_case(case)
     assert not problems, "\n".join([f"case {case['id']} ({case['name']}):", *problems, f"run: {summary}"])
 
 

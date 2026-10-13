@@ -9,7 +9,8 @@ rejects the playbook.
     every definition_of_done name is a probe;
   - every required DoD item has an allowed action that could produce it (the linter's rule 4);
   - `never` has policy.required_never() for the risk classes the playbook allows;
-  - with observed steps (a run it was learned from), every allowed action was observed in that run.
+  - with observed steps (a run it was learned from), every allowed action was observed in that run;
+  - with declared actions (a written playbook's draft), every allowed action is one the technician named.
 
 The autonomy ceiling isn't here: it depends on the store's runs (PlaybookLibrary.ceiling).
 """
@@ -30,9 +31,12 @@ from tech.safety.lint import dod_unmet
 from tech.safety.policy import required_never
 
 
-def check(text: str, intent: str, *, observed: Collection[str] | None = None) -> list[str]:
+def check(text: str, intent: str, *, observed: Collection[str] | None = None,
+          declared: Collection[str] | None = None) -> list[str]:
     """Every reason this playbook text can't be approved under `intent`. `observed` is the set of actions
-    the source run verified, or None when there is no run behind it (a written playbook)."""
+    the source run verified, or None when there is no run behind it (a written playbook). `declared` is the
+    actions a technician named for a written playbook's draft; at approval the YAML itself is the
+    declaration, so it is None there."""
     try:
         playbook = parse_playbook(text, intent)
     except (yaml.YAMLError, ValidationError, ValueError, TypeError, AttributeError) as exc:
@@ -61,6 +65,9 @@ def check(text: str, intent: str, *, observed: Collection[str] | None = None) ->
     if observed is not None:
         problems += [f"allowed_actions has {a}, which the run it was learned from never did."
                      for a in playbook.allowed_actions if a not in observed and a not in unknown]
+    if declared is not None:
+        problems += [f"allowed_actions has {a}, which the technician didn't name." for a in playbook.allowed_actions
+                     if a not in declared and a not in unknown]
     return problems
 
 

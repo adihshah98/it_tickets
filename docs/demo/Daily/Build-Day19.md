@@ -21,7 +21,7 @@ Each part ends with green tests and a commit, then a stop for review.
 | Part | What | Behaviour change? | Status |
 | ---- | ---- | ----------------- | ------ |
 | 1 | Library: `approve`, `set_autonomy`, ceiling, `playbook_check`, version on the plan event, demotion; #27, #28 | Learned playbooks can run; A3 runs can demote; gate rule `autonomy.unproven` | **Done** |
-| 2 | `DraftSource`, `from_run`/`from_written`, the drafter (offline, FunctionModel) | New, nothing calls it yet | |
+| 2 | `DraftSource`, `from_run`/`from_written`, the drafter (offline, FunctionModel) | New, nothing calls it yet | **Done** |
 | 3 | API routes + a CLI `save-playbook`; optional live draft of run 20 | New routes only | |
 
 **Needs your approval:** only Part 3's optional live step (one Opus drafter call on run 20, no tenant writes).
@@ -280,6 +280,39 @@ Each needs a decision before Part 1. Each has a recommendation.
 - **#28's drafter input** has no 6-word span of the ticket and no `x@outside.com` (decision 5);
 - `from_written` with YAML text passes it through, and with prose it carries the declared
   `allowed_actions`.
+
+**As built:**
+
+- **`core/models/learning.py`:** `DraftSource` also carries the plan's `summary`, `assumptions` and
+  `confirmations` (question, proposed, evidence). `observed_actions` is a property: `None` for `written`,
+  otherwise the non-skipped steps' actions.
+- **`learning/sources.py`:**
+  - each step's params come from `step_started` (as executed, `$ref`s resolved), falling back to the plan;
+  - the kind is `technician_run` if any step's actor is a technician (Day 20 adds the actor);
+  - `NotLearnable` is raised for a run that isn't DONE with a verified write;
+  - `proposed_intent()` skips `unknown` (decision 7).
+- **The drafter's prompt leaves out object IDs and empty values** (keys `id`, `…Id`, `…_id`).
+  - **Why:** reading #23's real prompt showed the drive and item IDs in both the step params and the read
+    args. The drafter generalizes, so it doesn't need them, and they read as TAP-like to the secret
+    scanner (Build-Day18).
+  - Search queries and file names stay.
+  - The `DraftSource` keeps the IDs, for Day 21's side-by-side view.
+- **The probe list** has only the probes the observed actions can produce, plus `message_sent`, whose
+  example is `{to: "$requester"}`. (The shipped playbooks' first use was `via: one_time_link`, which a
+  learned playbook has no step for.)
+- **`playbook_check.check(..., declared=...)`:** a written playbook's draft must stay within the actions
+  the technician named. At approval it's `None`, because the YAML itself is the declaration.
+- **`draft()`** never raises. A model error or timeout becomes a problem, and if a draft still fails the
+  checks after the retry, it's returned with its last YAML and problems. The `playbook_drafted` event
+  records `ok` and `usage`.
+- **`eval_harness.run_case`** also returns `(store, run_id)`, and `load_case(id)` is new, so the drafter
+  tests learn from #23's and #28's real runs.
+
+**Tests:** `test_drafter.py` has 11 tests. They cover the sources (#23, an unfinished #24, written), #28's
+prompt (no 6-word span of the ticket, no `x@outside.com`, no "remember"), the prompt's sections and
+dropped IDs, a valid draft and its event, one retry carrying the problems, two failures, and a timeout.
+
+**Result:** `uv run pytest`: 450 passed. `ruff` is clean. No model was called.
 
 ## Part 3: API, CLI, optional live
 

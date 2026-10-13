@@ -2,7 +2,7 @@
 
 Split into submodules in Week 3 (Build-W3.md) when offboarding and MFA roughly doubled the step union:
 `base` holds the shared primitives (IDs, references, the intent slug, the RiskClass literal), then `triage`,
-`params`, `plan` and `gate`. This package re-exports the full public surface, so every
+`params`, `plan`, `gate` and (Week 4) `learning`. This package re-exports the full public surface, so every
 `from tech.core.models import ...` keeps working unchanged.
 """
 
@@ -27,6 +27,7 @@ from tech.core.models.base import (
     parse_ref,
 )
 from tech.core.models.gate import GateDecision
+from tech.core.models.learning import DraftSource, ObservedRead, ObservedStep, SourceKind
 from tech.core.models.params import (
     AuthMethodDeleteParams,
     AuthMethodType,
@@ -91,4 +92,6 @@ __all__ = [
     "GroupRemoveMemberStep", "GroupAddOwnerStep", "AuthMethodDeleteStep", "FileRestoreVersionStep",
     # gate
     "GateDecision",
+    # learning
+    "DraftSource", "ObservedRead", "ObservedStep", "SourceKind",
 ]
