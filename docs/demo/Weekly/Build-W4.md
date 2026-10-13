@@ -59,15 +59,13 @@ Week 4 builds the fourth demo scenario, the one that answers "what happens with 
 - **The eval harness comes first, so that Week 4 is built against it** (the same argument as Week 3's "linter first"). Two tiers, as Build-W3 designed:
   - **Offline:** a fresh `FakeTenant` per case, FunctionModel or recorded outputs. It asserts the intent, the lint result, the gate decisions and the terminal state, and **zero gate bypasses**: every `step_started` must follow a non-blocked `gate_decision`, and an `approve` step needs an `approval`, or a technician actor for console runs.
   - **Live:** `-m live`, with a tenant reset between cases.
-
-  Cases are data (`cases.yaml`). The case runner calls the same `runner` functions the API does, so there is no special path.
+  - Cases are data (`cases.yaml`). The case runner calls the same `runner` functions the API does, so there is no special path.
 - **One playbook store.** Every playbook is a `PlaybookVersion` row with these columns:
   - `intent`, `version`, `yaml` (text);
   - `status`: `draft`, `approved` or `retired`;
   - `source`: `shipped`, `agent_run`, `technician_run`, `written` or `audit_log`;
   - `source_run_id`, `approved_by`, `created_at`.
-
-  On startup, `PlaybookLibrary.sync_shipped()` imports each `playbooks/*.yaml` as an approved `shipped` version if it is absent or its content hash changed. Editing a shipped playbook in the UI creates v2 (`source=written`).
+  - On startup, `PlaybookLibrary.sync_shipped()` imports each `playbooks/*.yaml` as an approved `shipped` version if it is absent or its content hash changed. Editing a shipped playbook in the UI creates v2 (`source=written`).
   - Per-client autonomy moves to a `ClientAutonomy` table, seeded from `client_facts.autonomy`.
   - `client_facts.yaml` itself stays a file. Learning never writes client facts.
   - The `PlaybookLibrary` on `Runtime` replaces the loader's module functions (`intents()`, `load_playbooks()`, `prompt_text()`). The loader keeps the YAML parsing and validation, used for seeding and by tests through a library built from the shipped files.
@@ -91,12 +89,11 @@ Week 4 builds the fourth demo scenario, the one that answers "what happens with 
   - **observed steps**, each with its action, params, verify result and actor;
   - the reads that informed them;
   - findings, with notes from the technician.
-
-  One drafter (Opus, effort `high`, no tools) turns a `DraftSource` into a `Playbook`. The sources differ only in how the observed steps are gathered:
-  - **agent run:** the run's verified steps;
-  - **technician console run:** the same executor events, with the actor set to `technician:{name}`;
-  - **written:** no steps. The technician's prose (or YAML) is the input, with `allowed_actions` named explicitly;
-  - **audit log:** `directoryAudits` entries mapped to catalogue actions (below).
+  - One drafter (Opus, effort `high`, no tools) turns a `DraftSource` into a `Playbook`. The sources differ only in how the observed steps are gathered:
+    - **agent run:** the run's verified steps;
+    - **technician console run:** the same executor events, with the actor set to `technician:{name}`;
+    - **written:** no steps. The technician's prose (or YAML) is the input, with `allowed_actions` named explicitly;
+    - **audit log:** `directoryAudits` entries mapped to catalogue actions (below).
 - **The drafter never sees raw ticket text.** It gets the triage, not the email. That is how eval #28 ("remember for next time: always forward…") cannot reach a playbook. Technician notes and written prose are trusted input, because they come from an authenticated technician, not a ticket.
 - **Code checks are hard failures** (`safety/playbook_check.py`):
   - every action is in `ACTIONS`;
@@ -105,8 +102,7 @@ Week 4 builds the fourth demo scenario, the one that answers "what happens with 
   - `never` includes the default rules for the action classes used;
   - the YAML round-trips;
   - **for sources with observed steps**, `allowed_actions` is a subset of the actions observed, with no new risk class.
-
-  The checks run on the draft (1 drafter retry) and again on the human-edited YAML at approval.
+  - The checks run on the draft (1 drafter retry) and again on the human-edited YAML at approval.
 - **The autonomy ceiling depends on evidence.**
   - A playbook with no observed run behind it (`written`, or an edited `shipped`) can be approved at A1 or A2 only.
   - It becomes A3-eligible after 1 successful approved run on that version.
@@ -116,8 +112,7 @@ Week 4 builds the fourth demo scenario, the one that answers "what happens with 
   - picks a catalogue action;
   - fills params from a picker of IDs **observed in this run's transcript** (grounded), or types a GUID that one confirming read resolves;
   - executes.
-
-  The step goes through `gate.evaluate` with a `technician_actor` flag. `never` rules and catalogue blocks still apply; `approve` is satisfied by the technician's own action. It then goes through the normal executor (idempotency, snapshot, act, verify). The events are the same, with `actor` added, so the audit trail, the DoD and "Save as playbook" work unchanged.
+  - The step goes through `gate.evaluate` with a `technician_actor` flag. `never` rules and catalogue blocks still apply; `approve` is satisfied by the technician's own action. It then goes through the normal executor (idempotency, snapshot, act, verify). The events are the same, with `actor` added, so the audit trail, the DoD and "Save as playbook" work unchanged.
 - **Audit-log learning is scoped to directory changes.**
   - On an escalated run, the technician clicks "I fixed it in the admin center", and we read `GET /auditLogs/directoryAudits` filtered to the window from escalation to now and to target IDs observed in the run.
   - We poll for up to 15 minutes for log lag and show "waiting for audit logs".
@@ -188,8 +183,7 @@ The through-line: Weeks 1-3 proved the machinery works when a playbook says what
   - `PlaybookVersion`/`ClientAutonomy` tables;
   - `PlaybookLibrary` with `sync_shipped()`, `has()`, `intents()`, `get()`, `prompt_text()`, `autonomy()`;
   - intake, investigator, lint, gate and runner read through `Runtime.library`.
-
-  **Gate:** the eval harness passes 22/22 unchanged, and the onboarding gate decisions are byte-for-byte unchanged.
+  - **Gate:** the eval harness passes 22/22 unchanged, and the onboarding gate decisions are byte-for-byte unchanged.
 - **Open intents:** `IntentSlug` and the near-duplicate validator.
 - **No-playbook mode:**
   - the runner flag;
@@ -225,8 +219,7 @@ The through-line: Weeks 1-3 proved the machinery works when a playbook says what
   2. Run Sophie's ticket via the CLI and approve.
   3. Confirm the current version in SharePoint.
   4. Add `test_live_file_restore.py`.
-
-  Un-xfail **#23, #24**.
+  - Un-xfail **#23, #24**.
 - **Check first thing:** the SharePoint search-index lag on `files.search` after reset. If it's too slow, add a fallback that lists the team-site drive by name.
 
 ### Day 19. Drafter, code checks, approval, autonomy
@@ -265,8 +258,7 @@ The through-line: Weeks 1-3 proved the machinery works when a playbook says what
   - the gate runs with `technician_actor` (never/catalogue still block);
   - the executor runs it;
   - the events carry `actor`.
-
-  A run finished this way can close (DoD on the verified steps plus a technician note) and is `can_save_playbook`.
+  - A run finished this way can close (DoD on the verified steps plus a technician note) and is `can_save_playbook`.
 - **Audit-log learning:**
   - the `directoryAudits` read;
   - `audit_map.py`;
@@ -315,8 +307,7 @@ The through-line: Weeks 1-3 proved the machinery works when a playbook says what
   - record cost;
   - exercise replay once;
   - fix the flakiest step.
-
-  Decide whether the console run or the written playbook gets a 20-second mention in the "unknown ticket" segment.
+  - Decide whether the console run or the written playbook gets a 20-second mention in the "unknown ticket" segment.
 - **Docs:**
   - Product.MD §2 (four learning sources), §4 (real vs. mocked) and §5 (playbook screens);
   - Tech.MD §4.10 (sources, one store, autonomy ceiling, demote to A2), §8 (technician actor) and the "Week 4" section marked done;
@@ -339,8 +330,7 @@ The eval harness, no-playbook path, file restore, the drafter, and agent-run and
   - library versioning, `sync_shipped` and demotion;
   - technician-step gating;
   - audit mapping.
-
-  The three existing intents' gate decisions are unchanged.
+  - The three existing intents' gate decisions are unchanged.
 - After `uv run tenant/reset.py`, `uv run pytest -m live`: onboarding, offboarding, MFA reset and file restore reach DONE with every DoD probe ✔. A learned A3 run reaches DONE with zero `approval` events.
 - Manual, in the UI from reset:
   1. Sophie: banner, one approval, verified restore (check the SharePoint version history).

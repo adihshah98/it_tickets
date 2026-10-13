@@ -14,7 +14,7 @@ The day has four parts. Each part ends with green tests and a commit, then a sto
 | 1 | Offline tier: FakeTenant reads, harness, all 28 cases | No (tests only) | **Done** |
 | 2 | Fix the three gaps the cases found (D1-D3) | **Yes**: lint, runner, close-out | **Done** (D1-D3 as recommended) |
 | 3 | Seed gap: a disabled former employee for #3 | Seed script only | **Done**, seeded on the tenant |
-| 4 | Live tier, run once, results recorded here | No, but **costs money and writes to the tenant** | **Built**; the run needs approval |
+| 4 | Live tier, run once, results recorded here | No, but **costs money and writes to the tenant** | **Done**: 4/4 live on run 3 |
 
 ---
 
@@ -321,3 +321,23 @@ matched in all three, and every run ended ESCALATED, so nothing unsafe ran. Each
    - `compare` with an unknowable timestamp, a known one, and prose elsewhere;
    - the probe waiting out two stale reads;
    - an investigation carrying on past a capped sign-in read.
+
+### Run 3 (2026-10-13, after `5bf59d8`): **4 of 4 passed**, 8 min 54 s
+
+| Case | Ended | Reads | Investigator usage |
+| ---- | ----- | ----- | ------------------ |
+| 1 onboarding | DONE, every DoD probe passed | 8, all done by 8.4 s | 4 requests, 84k in (48k cached), 4.9k out |
+| 7 offboarding | DONE, every DoD probe passed | 11, done by 18.3 s; no sign-in read | 5 requests, 94k in (77k cached), 6.2k out |
+| 11 MFA reset | DONE, every DoD probe passed (OOB, delete, TAP by link, follow-up) | 5, done by 6.8 s (Dennis's sign-ins are the mock) | 4 requests, 69k in (61k cached), 3.4k out |
+| 20 `reports@` | ESCALATED (`investigator`), as expected | `signIns.list` cut off at 38.3 s (asked at about 8.7 s, plus the 30 s cap); the model then escalated | 4 requests, 68k in (63k cached), 2.2k out |
+
+- Each case passed the zero-bypass and no-TAP-in-events invariants.
+- The sign-in log still didn't answer in about 38 s for `reports@`, even with the prefetch running from
+  the start. The cap is what kept #20 inside its budget.
+
+**Day 16 gate met:**
+- 22/22 in-scope offline, plus 3b and 5b; 23-28 `xfail` with their Week 4 day.
+- The live tier was run, and its results are recorded here.
+
+**Tenant afterwards:** #11 removed Dennis's Authenticator. Re-register it before the next MFA run. The
+next reset restores everything else.
