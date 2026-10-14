@@ -98,6 +98,11 @@ export const getPlaybook = (intent: string) => call<PlaybookView>(`/playbooks/${
 
 export const listPlaybooks = () => call<PlaybookSummary[]>("/playbooks");
 
+/** /playbooks/new: a playbook written in plain English (or YAML) -> a draft. One Opus call; nothing saved, and not
+ * recorded anywhere (no run), so the page keeps it. */
+export const writtenPlaybook = (intent: string, text: string, allowedActions: string[], by: string) =>
+  call<DraftView>("/playbooks", { intent, text, allowed_actions: allowedActions, by });
+
 /** Approve's checks without saving: the problems, and the highest autonomy it could be approved at. */
 export const checkPlaybook = (intent: string, yaml: string, source: PlaybookSource, sourceRunId: number | null) =>
   call<{ problems: string[]; ceiling: Level | null }>(`/playbooks/${encodeURIComponent(intent)}/check`,

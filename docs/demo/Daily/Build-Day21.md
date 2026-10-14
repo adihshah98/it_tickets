@@ -526,6 +526,41 @@ clicked, since they'd change your library.
 - `app/playbooks/page.tsx` and `components/PlaybookLibrary.tsx` (decision 14), plus the nav link.
 - **Tests:** display. The written path's rules are covered by L3 in Part 1.
 
+**As built:**
+
+- **`/playbooks/new` → `NewPlaybook.tsx`:**
+  - the intent (checked against `INTENT_RE`), the steps in plain English, and the allowed actions (every
+    catalogue action, with its risk class);
+  - Draft is enabled once all three are filled, then shows "Drafting… (about a minute)";
+  - the draft opens `PlaybookReview` in place, with source `written`, no run, and "As written" plus the
+    allowed actions as its source. A written draft isn't recorded anywhere, so the page keeps it;
+  - "← Back to what you wrote" keeps the form;
+  - `new` is a static segment, so it wins over `[intent]`.
+- **`/playbooks` → `PlaybookLibrary.tsx`:** a table from `GET /playbooks` showing:
+  - the intent, linking to its page;
+  - the version;
+  - the source (shipped plain; learned or written in violet), "from run #N" linking to the run, and the
+    approver and date;
+  - the autonomy, with "(A3 once a run on it succeeds)" under an A2 ceiling;
+  - **Demote to A2** on A3 rows, one click, then a reload.
+
+  Plus a **New playbook** button.
+- **Nav:** "Playbooks" on the right of the top bar.
+- **`lib/api.ts`:** `writtenPlaybook(...)`.
+
+**Checked against `data/tech.db`, with no Draft or Demote clicked:**
+
+- **`/playbooks`** lists:
+  - `file.restore_version` v1, learned from an agent run (run #20), A3, Demote;
+  - `mfa.reset`, `user.offboard` and `user.onboard`, shipped, A2;
+  - `site.grant_access` v1, from a technician's run (run #21), A3, Demote;
+  - `user.update_title` v1, from the audit logs (run #24), A2.
+- **`/playbooks/new`:** the catalogue checklist renders. Draft enables after an intent, steps and
+  `group.addMember`.
+
+**Result:** web `npm test` (38), `typecheck`, `lint` and `build` are green. The backend is unchanged (511
+passed).
+
 ## Part 7: live, in the browser (needs your approval)
 
 From `tech library reset` and `tenant/reset.py --files all`:

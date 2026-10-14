@@ -15,6 +15,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <div className="mx-auto flex max-w-4xl items-center gap-4 px-4 py-2">
             <Link href="/" className="text-sm font-semibold">AI Technician</Link>
             <span className="text-xs text-neutral-400">Northwind Parking</span>
+            <Link href="/playbooks" className="ml-auto text-sm text-neutral-600 hover:text-neutral-900">Playbooks</Link>
           </div>
         </nav>
         <main className="mx-auto max-w-4xl px-4 py-6">{children}</main>
