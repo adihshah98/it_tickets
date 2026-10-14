@@ -11,6 +11,8 @@
     draft_playbook  "Save as playbook" on a finished no-playbook run: the drafter's YAML, not yet saved.
     technician_step "Do it myself" on an ESCALATED run: one catalogue action, grounded, gated (technician
               path) and run by the executor with actor technician:{email}. The run stays ESCALATED.
+    technician_close  closes that run: ESCALATED -> CLOSING -> DONE, with the no-playbook DoD over the
+              technician's verified steps and their note in the PSA note (or back to ESCALATED on a failed DoD).
 
 Each call can run in a new process (the CLI): what a run needs is rebuilt from its events: the plan
 from `plan`, the intents from `triage`, the approver's answers from `approval`, finished steps and
@@ -46,8 +48,8 @@ from tech.execution.catalogue import ACTIONS, FOLLOWUP_ACTIONS
 from tech.execution.executor import Execution
 from tech.graph.client import GraphClient, GraphError, graph_from_settings
 from tech.graph.reads import Transcript, fetch
-from tech.graph.writes import SecretLeak
-from tech.learning.sources import from_run
+from tech.graph.writes import SecretLeak, Secrets
+from tech.learning.sources import from_run, proposed_intent
 from tech.playbooks import ClientFacts, PlaybookLibrary, load_client_facts
 from tech.safety import gate
 from tech.safety.lint import file_problems
@@ -69,6 +71,8 @@ TRANSITIONS: dict[RunState, set[RunState]] = {
 for _state in S:  # any live run can escalate or be held (§3)
     if _state not in TERMINAL:
         TRANSITIONS.setdefault(_state, set()).update({S.ESCALATED, S.HELD} - {_state})
+# The one way out of ESCALATED: a technician finished the job in the console (technician_close, Build-Day20).
+TRANSITIONS[S.ESCALATED] = {S.CLOSING}
 
 ANSWER_KEYS = ("upn_format", "start_date")
 
@@ -149,11 +153,14 @@ def findings(store: Store, run_id: int) -> list[str]:
 
 
 def can_save_playbook(store: Store, run_id: int) -> bool:
-    """A finished no-playbook run that changed something can become a playbook draft (Build-W4 "Save as
-    playbook"). Day 19-20 widen this to escalated, A1 and technician runs."""
+    """A finished run that changed something can become a playbook draft (Build-W4 "Save as playbook") when no
+    playbook covered it, or a technician did the work in the console (an escalated or A1 run they finished:
+    its steps may make a better playbook than the one that failed)."""
     plan = store.last_event(run_id, "plan")
-    return (store.get_run(run_id).state == S.DONE and plan is not None and bool(plan.payload.get("no_playbook"))
-            and any(not e.payload.get("skipped") for e in store.events_of(run_id, "step_verified")))
+    verified = [e.payload for e in store.events_of(run_id, "step_verified") if not e.payload.get("skipped")]
+    no_playbook = plan is None or bool(plan.payload.get("no_playbook"))
+    by_technician = any(v.get("actor", "").startswith("technician:") for v in verified)
+    return store.get_run(run_id).state == S.DONE and bool(verified) and (no_playbook or by_technician)
 
 
 async def draft_playbook(rt: Runtime, run_id: int, *, intent: str | None = None,
@@ -161,8 +168,8 @@ async def draft_playbook(rt: Runtime, run_id: int, *, intent: str | None = None,
     """"Save as playbook": draft one from this run (Build-Day19). `intent` names the job when the proposed
     one is wrong or `unknown`; `notes` are the technician's. Nothing is saved until PlaybookLibrary.approve."""
     if not can_save_playbook(rt.store, run_id):
-        raise RunError(f"run {run_id} can't be saved as a playbook: it must be a finished no-playbook run "
-                       "that changed something")
+        raise RunError(f"run {run_id} can't be saved as a playbook: it must be a finished run that changed "
+                       "something, with no playbook or with a technician's console steps")
     source = from_run(rt.store, run_id, notes=notes or [])
     if intent:
         source = source.model_copy(update={"intent": intent})
@@ -241,6 +248,52 @@ async def _confirm(rt: Runtime, run_id: int, transcript: Transcript, guid: str, 
     rt.store.append_event(run_id, "tool_call", {"tool": "directoryObjects.get", "args": args, "ok": True,
                                                 "error": None, "result": result, "t": 0.0, "actor": actor})
     transcript.record("directoryObjects.get", args, result)
+
+
+def technician_steps(store: Store, run_id: int) -> list[dict[str, Any]]:
+    """The technician's console steps that verified a change, as their step_started payloads (params as run)."""
+    started = {e.payload["step_id"]: e.payload for e in store.events_of(run_id, "step_started")}
+    return [started[v.payload["step_id"]] | {"verified": v.payload}
+            for v in store.events_of(run_id, "step_verified")
+            if v.payload.get("actor", "").startswith("technician:") and not v.payload.get("skipped")
+            and v.payload["step_id"] in started]
+
+
+def check_closable(store: Store, run_id: int) -> None:
+    """technician_close's preconditions, separate so the API can refuse (409) before starting the close."""
+    state = store.get_run(run_id).state
+    if state != S.ESCALATED:
+        raise RunError(f"run {run_id} is {state}; only an ESCALATED run a technician worked on can be closed")
+    if not technician_steps(store, run_id):
+        raise RunError(f"run {run_id} has no verified console step; do the work first (or leave it escalated)")
+
+
+async def technician_close(rt: Runtime, run_id: int, *, by: str, note: str | None = None) -> RunState:
+    """Close a run a technician finished in the console. The DoD is the no-playbook one over their verified
+    steps (each step's verify already passed; this adds the outcome probes and the reply), never the playbook's:
+    its probes expect plan fields the console steps don't have (Build-Day20 decision 6). The agent's plan stays
+    the run's plan; the steps here are rebuilt from the events, in memory."""
+    check_closable(rt.store, run_id)
+    by = person(by, rt.domain)
+    done = technician_steps(rt.store, run_id)
+    agent_plan = rt.store.last_event(run_id, "plan")
+    triaged = load_triage(rt.store, run_id).intents
+    intent = proposed_intent(agent_plan.payload["plan"].get("intent") if agent_plan else None, triaged)
+    steps = [STEP_TYPES[d["action"]].model_validate({
+        "id": d["step_id"], "action": d["action"], "params": d["params"], "expected": {},
+        "rationale": f"done by {d['actor']} in the console", "risk_class": ACTIONS[d["action"]].risk_class})
+        for d in done]
+    plan = Plan(intent=intent, summary=f"Finished by {by} in the console", steps=steps)
+    transition(rt.store, run_id, S.CLOSING, by=by, note=note)
+    failed = await closeout.close_out(rt.store, rt.graph, run_id, plan, facts=rt.facts, library=rt.library,
+                                      secrets=Secrets(), model=rt.closeout_model, sleep=rt.sleep,
+                                      definition=closeout.no_playbook_dod(plan), note=f"{by}: {note}" if note else None)
+    if failed:
+        transition(rt.store, run_id, S.ESCALATED, kind="dod", failed_probes=failed, findings=findings(rt.store, run_id),
+                   reason=f"definition of done not met: {', '.join(failed)}")
+    else:
+        transition(rt.store, run_id, S.DONE)
+    return rt.store.get_run(run_id).state
 
 
 def observed_objects(store: Store, run_id: int) -> list[dict[str, Any]]:

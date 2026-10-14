@@ -97,11 +97,15 @@ def no_playbook_dod(plan: Plan) -> Playbook | None:
 
 async def close_out(store: Store, graph: GraphClient, run_id: int, plan: Plan, *, facts: ClientFacts,
                     library: PlaybookLibrary, secrets: Secrets, model: Any = CLOSEOUT_MODEL,
-                    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> list[str]:
-    """Run the close-out for an executed run (state CLOSING). Returns the names of failed DoD probes."""
+                    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+                    definition: Playbook | None = None, note: str | None = None) -> list[str]:
+    """Run the close-out for an executed run (state CLOSING). Returns the names of failed DoD probes.
+    `definition` replaces the playbook's definition of done, and `note` is a technician's note for the PSA note: a
+    run a technician finished in the console passes both (runner.technician_close, Build-Day20)."""
     triage = store.last_event(run_id, "triage").payload["triage"]
     requester = {"name": triage["requester"]["name"], "email": triage["requester"]["email"]}
-    playbook = dod_playbook(library.for_intents([plan.intent, *triage["intents"]])) or no_playbook_dod(plan)
+    playbook = (definition or dod_playbook(library.for_intents([plan.intent, *triage["intents"]]))
+                or no_playbook_dod(plan))
     ctx = dod.DodContext(store, graph, run_id, plan, facts, requester["email"], sleep=sleep)
 
     probes = await dod.check(ctx, playbook, exclude=("message_sent",)) if playbook else []
@@ -112,8 +116,10 @@ async def close_out(store: Store, graph: GraphClient, run_id: int, plan: Plan, *
     known = secrets.known() | {row.token for row in run_links}
     has_link = any(row.to.casefold() == requester["email"].casefold() for row in run_links)
     try:
-        drafts = await draft(build_context(store, run_id, plan, probes, requester=requester, playbook=playbook),
-                             model=model)
+        context = build_context(store, run_id, plan, probes, requester=requester, playbook=playbook)
+        if note:
+            context["technician_note"] = note
+        drafts = await draft(context, model=model)
     except DRAFT_ERRORS as exc:
         store.append_event(run_id, "error", {"where": "closeout", "error": f"{type(exc).__name__}: {exc}"})
         drafts = None

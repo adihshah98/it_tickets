@@ -27,6 +27,9 @@ import re
 import subprocess
 import time
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -389,14 +392,24 @@ def plan_problems(want: dict[str, Any], plan: dict[str, Any] | None) -> list[str
 # ------------------------------------------------------------------ the offline tier
 
 
-async def run_case(case: dict[str, Any]) -> tuple[list[str], dict[str, Any], Store, int]:
-    """Run one case offline. Returns (problems, a summary for the failure message, the store, the run id):
-    the store lets other tests start from a case's finished run (e.g. learning from it)."""
+@dataclass
+class Offline:
+    """A seeded FakeTenant behind respx, and a Runtime over a fresh store: what each case runs in. Learning
+    tests (test_learning.py) run several tickets in one, so the second sees what the first changed."""
+
+    tenant: FakeTenant
+    ids: dict[str, str]
+    rt: runner.Runtime
+
+    @property
+    def store(self) -> Store:
+        return self.rt.store
+
+
+@asynccontextmanager
+async def offline() -> AsyncIterator[Offline]:
     tenant = FakeTenant(DOMAIN)
     ids = seed(tenant)
-    case = fill(case, ids)
-    apply_setup(tenant, ids, case.get("setup", {}))
-    plan = plan_data(case["plan"])
 
     async def tokens():
         return "tok", time.time() + 3600
@@ -404,24 +417,40 @@ async def run_case(case: dict[str, Any]) -> tuple[list[str], dict[str, Any], Sto
     async def no_sleep(_: float) -> None:
         pass
 
-    store = Store("sqlite://")
     with respx.mock(assert_all_called=False) as router:
         router.route(host="graph.microsoft.com").mock(side_effect=tenant)
         graph = GraphClient(tokens, sleep=no_sleep)
-        rt = runner.Runtime(store=store, graph=graph, facts=load_client_facts(DOMAIN), domain=DOMAIN, link_key=LINK_KEY,
-                            sleep=no_sleep, closeout_model=drafts_model(), clean_sign_ins_for=ids["dennis"])
-        apply_library_setup(rt.library, case.get("setup", {}))
-        library_before = library_state(rt.library)
+        rt = runner.Runtime(store=Store("sqlite://"), graph=graph, facts=load_client_facts(DOMAIN), domain=DOMAIN,
+                            link_key=LINK_KEY, sleep=no_sleep, closeout_model=drafts_model(),
+                            clean_sign_ins_for=ids["dennis"])
         try:
-            sender = f"{case['from']}@{DOMAIN}"
-            run_id = store.create_run(store.create_ticket(case["ticket"], sender).id).id
-            after_start = await runner.start(
-                rt, run_id, case["ticket"], sender,
-                intake_model=TestModel(custom_output_args=triage_data(case, ids)),
-                investigator_model=investigator_model(case, plan))
-            refused = await act(rt, run_id, case)
+            yield Offline(tenant, ids, rt)
         finally:
             await graph.aclose()
+
+
+async def start_ticket(off: Offline, case: dict[str, Any]) -> tuple[int, RunState, dict[str, Any]]:
+    """Start one (filled) case's ticket with its recorded triage and investigation: (run id, state, plan)."""
+    plan = plan_data(case["plan"])
+    sender = f"{case['from']}@{DOMAIN}"
+    run_id = off.store.create_run(off.store.create_ticket(case["ticket"], sender).id).id
+    after_start = await runner.start(off.rt, run_id, case["ticket"], sender,
+                                     intake_model=TestModel(custom_output_args=triage_data(case, off.ids)),
+                                     investigator_model=investigator_model(case, plan))
+    return run_id, after_start, plan
+
+
+async def run_case(case: dict[str, Any]) -> tuple[list[str], dict[str, Any], Store, int]:
+    """Run one case offline. Returns (problems, a summary for the failure message, the store, the run id):
+    the store lets other tests start from a case's finished run (e.g. learning from it)."""
+    async with offline() as off:
+        case = fill(case, off.ids)
+        apply_setup(off.tenant, off.ids, case.get("setup", {}))
+        apply_library_setup(off.rt.library, case.get("setup", {}))
+        library_before = library_state(off.rt.library)
+        run_id, after_start, plan = await start_ticket(off, case)
+        refused = await act(off.rt, run_id, case)
+    store, rt, tenant, ids = off.store, off.rt, off.tenant, off.ids
 
     problems = refused + check(case, case.get("expect", {}), store, run_id, tenant, after_start, plan, ids)
     if case.get("expect", {}).get("library_unchanged") and (after := library_state(rt.library)) != library_before:

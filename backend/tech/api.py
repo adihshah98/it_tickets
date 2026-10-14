@@ -11,6 +11,7 @@
     POST /followups/{id}/run-now     run a scheduled follow-up now (the demo's license assignment)
     POST /runs/{id}/manual-step      "Do it myself": one catalogue action by a technician on an ESCALATED run
     GET  /runs/{id}/observed         the users, groups and files the run's reads saw (the console's ID picker)
+    POST /runs/{id}/close            close a run a technician finished in the console; close-out in the background
     POST /runs/{id}/playbook-draft   "Save as playbook": the drafter's YAML from a finished run (not saved)
     POST /playbooks                  a written playbook (prose or YAML) -> a draft (not saved)
     POST /playbooks/{intent}/approve save a draft (as edited) as the intent's next version, at an autonomy level
@@ -212,8 +213,20 @@ def snapshot(store: Store, run_id: int, web_origin: str, domain: str) -> dict[st
                        "status": f.status} for f in scheduler.for_run(store, run_id)],
         "links": link_rows,
         "closeout": closeout.view(store, run_id, link_rows),
+        "technician_steps": _technician_steps(store, run_id),
         "can_save_playbook": runner.can_save_playbook(store, run_id),
     }
+
+
+def _technician_steps(store: Store, run_id: int) -> list[dict[str, Any]]:
+    """The console steps (Build-Day20), each with its gate decision and execution status, for the
+    workspace's "Do it myself" panel. They aren't in the agent's plan, so `steps` doesn't show them."""
+    status = _step_status(store, run_id)
+    started = {e.payload["step_id"]: e.payload for e in store.events_of(run_id, "step_started")}
+    return [{"step_id": d["step_id"], "action": d["action"], "actor": d["actor"], "decision": d["decision"],
+             "rule_id": d["rule_id"], "reason": d["reason"], "params": started.get(d["step_id"], {}).get("params")}
+            | {"status": "blocked" if d["decision"] == "block" else "pending"} | status.get(d["step_id"], {})
+            for e in store.events_of(run_id, "gate_decision") if (d := e.payload).get("actor")]
 
 
 # ------------------------------------------------------------------ requests
@@ -238,6 +251,11 @@ class ManualStepIn(BaseModel):
     action: str
     params: dict[str, Any]
     by: str = Field(min_length=1)
+
+
+class CloseIn(BaseModel):
+    by: str = Field(min_length=1)
+    note: str | None = None
 
 
 class DraftIn(BaseModel):
@@ -386,6 +404,14 @@ def create_app(runtime: runner.Runtime | None = None, *, web_origin: str = DEFAU
             raise runner.RunError(f"run {run_id} has work running; wait for it to finish")
         ok, step_id, error = await runner.technician_step(rt, run_id, body.action, body.params, by=body.by)
         return {"ok": ok, "step_id": step_id, "error": error, "state": rt.store.get_run(run_id).state.value}
+
+    @app.post("/runs/{run_id}/close", status_code=202)
+    async def close(run_id: int, body: CloseIn) -> dict[str, str]:
+        if tasks.busy(run_id):
+            raise runner.RunError(f"run {run_id} has work running; wait for it to finish")
+        runner.check_closable(rt.store, run_id)
+        tasks.spawn(run_id, runner.technician_close(rt, run_id, by=body.by, note=body.note), what="close")
+        return {"state": rt.store.get_run(run_id).state.value}
 
     @app.get("/runs/{run_id}/observed")
     async def observed(run_id: int = Depends(existing_run)) -> list[dict[str, Any]]:

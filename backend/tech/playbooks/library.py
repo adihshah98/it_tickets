@@ -182,9 +182,14 @@ class PlaybookLibrary:
         return self._add_approved(intent, text, source=source, source_run_id=source_run_id, approved_by=approved_by)
 
     def successful_run(self, run_id: int) -> bool:
-        """A run that reached DONE with a person's approval on the way."""
-        return (self.store.get_run(run_id).state == RunState.DONE
-                and any(e.payload["decision"] == "approve" for e in self.store.events_of(run_id, "approval")))
+        """A run that reached DONE with a person behind its changes: an approval, or a technician who made them
+        in the console (Build-Day20; their own action is their approval)."""
+        if self.store.get_run(run_id).state != RunState.DONE:
+            return False
+        approved = any(e.payload["decision"] == "approve" for e in self.store.events_of(run_id, "approval"))
+        by_technician = any(e.payload.get("actor", "").startswith("technician:")
+                            for e in self.store.events_of(run_id, "step_verified"))
+        return approved or by_technician
 
     def successful_runs(self, intent: str, version: int) -> list[int]:
         """The successful approved runs that used this version of this intent's playbook."""

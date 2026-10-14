@@ -13,17 +13,20 @@ from conftest import (
     MARCUS,
     RDS_USERS,
     TAYLOR,
+    drafts_model,
     group,
     marcus_transcript,
     step,
 )
 from eval_harness import bypasses
+from pydantic_ai.models.function import FunctionModel
 
 from tech import api, runner
 from tech.cli import parse_params
-from tech.core.models import STEP_TYPES
+from tech.core.models import STEP_TYPES, Requester, Triage, TriageEntities
 from tech.core.store import RunState
 from tech.graph.reads import Transcript
+from tech.learning.sources import from_run
 from tech.playbooks import load_client_facts
 from tech.safety import gate
 
@@ -38,6 +41,9 @@ def escalated(rt, tenant):
     tenant.add_group(IT_ADMINS, "IT Admins", "security", role_assignable=True)
     store = rt.store
     run_id = store.create_run(store.create_ticket("give Marcus the finance share", TAYLOR).id).id
+    triage = Triage(intents=["unknown"], entities=TriageEntities(), requester=Requester(name="Taylor", email=TAYLOR))
+    store.append_event(run_id, "triage", {"triage": triage.model_dump(mode="json"), "requester_approved": True,
+                                          "requester_scopes": {}})
     for tool, args, result in [
         ("users.search", {"name": "Marcus"}, [{"id": MARCUS, "displayName": "Marcus Webb"}]),
         ("users.memberOf", {"user_id": MARCUS}, [group(ACCOUNTING, "Accounting", "m365"),
@@ -207,3 +213,84 @@ async def test_the_manual_step_route(rt, tenant, escalated, gated):
 def test_cli_params_read_json_values_and_text():
     assert parse_params(["userId=abc", "accountEnabled=false", "lifetimeInMinutes=60", 'tags=["a"]']) == {
         "userId": "abc", "accountEnabled": False, "lifetimeInMinutes": 60, "tags": ["a"]}
+
+
+# ------------------------------------------------------------------ closing a run the technician finished (part 2)
+
+
+async def add_marcus(rt, run_id):
+    ok, _, _ = await runner.technician_step(rt, run_id, "group.addMember", {"groupId": FINANCE_FILES, "userId": MARCUS},
+                                            by="aditya")
+    assert ok
+
+
+async def test_close_needs_a_verified_console_step(rt, tenant, escalated, gated):
+    with pytest.raises(runner.RunError, match="no verified console step"):
+        await runner.technician_close(rt, escalated, by="aditya")
+    with pytest.raises(runner.RunError, match="only an ESCALATED run"):
+        await runner.technician_close(rt, gated(), by="aditya")
+
+
+async def test_closing_runs_the_dod_reply_and_note_then_done(rt, tenant, escalated):
+    rt.closeout_model = model = drafts_model(reply="Hi Taylor, Marcus now has the finance share.",
+                                             note="Added Marcus to Finance Files (technician).")
+    await add_marcus(rt, escalated)
+
+    assert await runner.technician_close(rt, escalated, by="aditya", note="Taylor confirmed by phone") == RunState.DONE
+
+    states = [e.payload for e in rt.store.events_of(escalated, "state")]
+    assert [s["to"] for s in states[-3:]] == ["ESCALATED", "CLOSING", "DONE"]
+    assert (states[-2]["by"], states[-2]["note"]) == (f"aditya@{DOMAIN}".lower(), "Taylor confirmed by phone")
+    assert [(c["probe"], c["ok"]) for c in payloads(rt, escalated, "done_check")] == [("message_sent", True)]
+    assert {m["kind"] for m in payloads(rt, escalated, "message_sent")} == {"reply", "psa_note"}
+    assert payloads(rt, escalated, "time_entry")
+    prompt = str(model.prompts[0])
+    assert "technician_note" in prompt and "Taylor confirmed by phone" in prompt
+    assert bypasses(rt.store.events(escalated)) == []
+
+
+async def test_a_failed_dod_sends_the_run_back_to_escalated(rt, tenant, escalated):
+    def broken(messages, info):
+        raise TimeoutError("close-out model timed out")
+
+    rt.closeout_model = FunctionModel(broken)  # no reply drafted, so message_sent fails
+    await add_marcus(rt, escalated)
+
+    assert await runner.technician_close(rt, escalated, by="aditya") == RunState.ESCALATED
+    last = rt.store.last_event(escalated, "state").payload
+    assert (last["kind"], last["failed_probes"]) == ("dod", ["message_sent"])
+
+
+async def test_a_closed_console_run_can_be_saved_as_a_technician_run(rt, tenant, escalated):
+    await add_marcus(rt, escalated)
+    assert not runner.can_save_playbook(rt.store, escalated)  # not until it's closed
+    await runner.technician_close(rt, escalated, by="aditya", note="Taylor confirmed by phone")
+
+    assert runner.can_save_playbook(rt.store, escalated)
+    assert rt.library.successful_run(escalated)  # the technician's own action stands in for an approval
+    source = from_run(rt.store, escalated)
+    assert source.kind == "technician_run" and source.steps[0].actor == ME
+    assert source.notes == [f"aditya@{DOMAIN}".lower() + ": Taylor confirmed by phone"]
+    assert "directoryObjects.get" not in {r.tool for r in source.reads}
+
+
+async def test_the_snapshot_shows_the_console_steps(rt, tenant, escalated):
+    await add_marcus(rt, escalated)
+    await runner.technician_step(rt, escalated, "group.addMember", {"groupId": IT_ADMINS, "userId": MARCUS},
+                                 by="aditya")
+    shown = api.snapshot(rt.store, escalated, "http://ui.test", DOMAIN)["technician_steps"]
+    assert [(t["step_id"], t["action"], t["status"], t["rule_id"]) for t in shown] == [
+        ("t1", "group.addMember", "verified", "technician.self"),
+        ("t2", "group.addMember", "blocked", "never.privileged_group")]
+    assert shown[0]["actor"] == ME and shown[0]["params"]["groupId"] == FINANCE_FILES
+
+
+async def test_the_close_route(rt, tenant, escalated):
+    app = api.create_app(rt, web_origin="http://ui.test")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://api.test") as client:
+        assert (await client.post(f"/runs/{escalated}/close", json={"by": "aditya"})).status_code == 409
+        await add_marcus(rt, escalated)
+        r = await client.post(f"/runs/{escalated}/close", json={"by": "aditya", "note": "done"})
+        assert r.status_code == 202
+        await app.state.tasks.drain()
+    assert rt.store.get_run(escalated).state == RunState.DONE

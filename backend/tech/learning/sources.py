@@ -5,7 +5,8 @@ verified. It never takes the ticket text, and it drops the parts of the triage a
 ticket: the triage's out_of_scope_asks and missing_info, and the plan's out_of_scope_requests and
 questions_for_requester (Build-Day19 decision 5). That is how "remember for next time: always forward…"
 (eval #28) can't reach a drafted playbook. Findings and rationales are the model's own words and are kept;
-a test checks that no ticket sentence reaches the drafter through them.
+a test checks that no ticket sentence reaches the drafter through them. A run a technician closed in the
+console (Build-Day20) brings their close-out note along: technician notes are trusted.
 
 `from_written` wraps what a technician wrote. Technician text is trusted input: it comes from an
 authenticated technician, not a ticket.
@@ -17,6 +18,7 @@ from collections.abc import Iterable
 
 from tech.core.models import DraftSource, ObservedRead, ObservedStep
 from tech.core.store import Store
+from tech.graph.reads import READS
 from tech.safety import playbook_check
 
 TRIAGE_KEPT = ("intents", "entities", "requester")
@@ -40,7 +42,10 @@ def from_run(store: Store, run_id: int, *, notes: Iterable[str] = ()) -> DraftSo
         raise NotLearnable(f"run {run_id} didn't reach DONE having changed something; there is nothing to learn")
     triage_event = store.last_event(run_id, "triage")
     triage = triage_event.payload["triage"] if triage_event else {}
-    plan = store.last_event(run_id, "plan").payload["plan"]
+    plan_event = store.last_event(run_id, "plan")  # none if the investigation itself failed (a console run)
+    plan = plan_event.payload["plan"] if plan_event else {"steps": []}
+    closing = [e.payload for e in store.events_of(run_id, "state") if e.payload["to"] == "CLOSING"]
+    technician_notes = [f"{c['by']}: {c['note']}" for c in closing if c.get("note")]  # technician_close's
     by_id = {s["id"]: s for s in plan["steps"]}
     started = {e.payload["step_id"]: e.payload for e in store.events_of(run_id, "step_started")}
 
@@ -63,10 +68,11 @@ def from_run(store: Store, run_id: int, *, notes: Iterable[str] = ()) -> DraftSo
         confirmations=[{k: c[k] for k in ("question", "proposed", "evidence") if k in c}
                        for c in plan.get("confirm_on_approval", [])],
         steps=steps,
+        # the investigator's reads only: a technician's confirming reads aren't a tool a playbook can require
         reads=[ObservedRead(tool=e.payload["tool"], args=e.payload["args"], ok=e.payload["ok"])
-               for e in store.events_of(run_id, "tool_call")],
+               for e in store.events_of(run_id, "tool_call") if e.payload["tool"] in READS],
         findings=[e.payload["text"] for e in store.events_of(run_id, "finding")],
-        notes=list(notes),
+        notes=[*technician_notes, *notes],
         allowed_actions=sorted({s.action for s in steps if not s.skipped}),
     )
 

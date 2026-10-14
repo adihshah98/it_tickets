@@ -56,9 +56,11 @@ reply_subject and reply_body: to the requester (requester.name). Plain text, sho
 - Scheduled follow-ups, such as a license on the start date: say when.
 - Anything in out_of_scope_requests: say it was not done and needs a separate request.
 - Each line under notes: say it in plain words.
+- technician_note, if present: a technician did this work themselves; it's for the psa_note, not the reply.
 
 psa_note: for a technician reading the ticket later. Terse lines: what was done (UPN, group names),
-definition-of-done results, follow-ups, items handed to a technician, requests declined.
+definition-of-done results, follow-ups, items handed to a technician, requests declined, and the
+technician_note (if present) with who wrote it.
 """
 
 

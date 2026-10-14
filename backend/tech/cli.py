@@ -7,6 +7,7 @@
     uv run tech resume 7                                 # carry on an execution a crashed process left
     uv run tech followup list 7 | run 3                  # scheduled follow-ups; "run now"
     uv run tech step 21 group.addMember groupId=… userId=… --by aditya   # "Do it myself" on an ESCALATED run
+    uv run tech close 21 --by aditya [--note "Taylor confirmed by phone"]  # close it: DoD, reply, PSA note
     uv run tech save-playbook 20 --by aditya [--intent file.restore_version] [--autonomy A3] [--yes]
 
 `run` triages, investigates (linter in the loop), gates and, with nothing to approve, executes.
@@ -233,6 +234,10 @@ def main() -> None:
     step_p.add_argument("action", help="a catalogue action, e.g. group.addMember")
     step_p.add_argument("params", nargs="*", metavar="KEY=VALUE")
     step_p.add_argument("--by", required=True, help="the technician")
+    close_p = sub.add_parser("close", help="close an ESCALATED run you finished with console steps")
+    close_p.add_argument("run_id", type=int)
+    close_p.add_argument("--by", required=True, help="the technician")
+    close_p.add_argument("--note", help="for the PSA note (and the playbook, if this run is saved as one)")
     save_p = sub.add_parser("save-playbook", help="draft a playbook from a finished no-playbook run, and save it")
     save_p.add_argument("run_id", type=int)
     save_p.add_argument("--by", required=True, help="who approves the playbook")
@@ -270,6 +275,9 @@ def main() -> None:
                 print(f"   {step_id}: {'verified' if ok else 'not done: ' + (error or '')}", flush=True)
 
             code = asyncio.run(continue_run(args.run_id, step))
+        case "close":
+            code = asyncio.run(continue_run(args.run_id, lambda rt: runner.technician_close(
+                rt, args.run_id, by=args.by, note=args.note)))
         case "save-playbook":
             code = asyncio.run(with_runtime(lambda rt: save_playbook(
                 rt, args.run_id, by=args.by, intent=args.intent, autonomy=args.autonomy, yes=args.yes)))

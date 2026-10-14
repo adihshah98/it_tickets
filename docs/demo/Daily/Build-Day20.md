@@ -18,7 +18,7 @@ Each part ends with green tests and a commit, then a stop for review.
 | ---- | ---- | ----------------- |
 | 0 | Spike: audit-log lag and filters (needs you in the Entra admin center) | None: **done**, lag ≤ 2.5 min |
 | 1 | Technician steps: transcript from events, confirming read, gate's technician path, executor `actor`, bypass check | New path; agent runs unchanged: **done** |
-| 2 | Technician close-out, wider `can_save_playbook`, learning case **L1** | Escalated runs can close via a technician |
+| 2 | Technician close-out, wider `can_save_playbook`, learning case **L1** | Escalated runs can close via a technician: **done** |
 | 3 | Audit-log learning: the read, `audit_map`, `from_audit_log`, the polling route, **L2** | New path; first to cut if behind |
 | 4 | Live: one console step on the tenant, and an audit draft from a real admin-center change | None |
 
@@ -339,6 +339,63 @@ The results go into this doc and settle decision 9's names and decision 11's tim
   - `can_save_playbook` is true;
   - `from_run` kind is `technician_run`;
   - **L1** end to end (decision 12).
+
+**As built:**
+
+- **`runner.technician_close(rt, run_id, by, note)`:**
+  - `check_closable` first: the run must be ESCALATED with at least one verified console step. The API
+    calls it before the 202.
+  - The run then goes `ESCALATED → CLOSING`, with `by` and `note` on that state event, and
+    `close_out(definition=no_playbook_dod(plan), note=…)` runs over an in-memory plan of the technician's
+    steps.
+  - The outcome is `DONE`, or `ESCALATED` (kind `dod`) with the failed probes.
+  - `TRANSITIONS[ESCALATED] = {CLOSING}` is the only exit from ESCALATED, and only this function takes it.
+- **A group add's DoD is `message_sent` only.** `no_playbook_dod` adds outcome probes only for actions in
+  `dod.NO_PLAYBOOK_PROBES` (today a file restore). `user_in_groups` needs `$plan.mirrored_groups`, which a
+  console plan doesn't have, and the step's own verify already read the membership back. The plan's "close
+  → `user_in_groups` + `message_sent`" was therefore wrong. Adding console-friendly probe arguments is
+  left for when a DoD needs them.
+- **`close_out(definition=, note=)`:** the note reaches Sonnet as `technician_note`, and the close-out
+  instructions say it belongs in the PSA note, not the reply.
+- **Found while building, fixed:**
+  - `library.successful_run` required an `approval` event, which a technician run never has. Its
+    playbook would have been stuck at A2. Now a technician-verified step counts as a person behind the
+    change.
+  - `from_run` assumed a `plan` event, but a console run whose investigation failed has none.
+  - `from_run` now passes on only `READS` tools, so a technician's `directoryObjects.get` can't become a
+    `must_investigate` item that `playbook_check` would reject.
+  - It also carries the close note as a (trusted) technician note.
+- **`can_save_playbook`:** DONE, at least one verified write, and (no playbook, or any technician step).
+- **The snapshot's `technician_steps`** carries each console step's decision, rule, actor, params and
+  status, with `blocked` for a gate block.
+- **API and CLI:** `POST /runs/{id}/close {by, note}` returns 202 and runs the close-out as a background
+  task, like an approval; it's 409 if the run isn't closable. The CLI is `tech close RUN --by NAME
+  [--note …]`.
+- **Eval harness:** `run_case` is split into `offline()` (a seeded FakeTenant and Runtime, as a context
+  manager) and `start_ticket(off, case)`, so a test can run several tickets in one tenant. `run_case`
+  behaves as before.
+
+**Tests:**
+
+- `test_technician.py` (+6):
+  - close without a console step, or on a non-ESCALATED run → refused;
+  - close → `CLOSING` → `DONE`, with `message_sent` ✔, the reply and PSA note sent, the time entry, and
+    the note in Sonnet's context;
+  - a failed DoD → back to `ESCALATED` (kind `dod`);
+  - a closed console run → `can_save_playbook`, `successful_run`, and `from_run` with kind
+    `technician_run`, the note, and no confirming reads;
+  - the snapshot's `technician_steps` (verified, and blocked);
+  - the close route (409, then 202 → DONE).
+- **`test_learning.py` L1:**
+  1. Jordan's ticket escalates with no playbook.
+  2. `tech step` group.addMember → verified, then close → DONE.
+  3. The draft is a `technician_run` with the note; it's approved at A3.
+  4. Luis's ticket runs under `site.grant_access` v1 with `auto/autonomy.a3.write.reversible`, no
+     approval, and DONE.
+
+  Zero bypasses on both runs.
+
+**Result:** `uv run pytest`: 483 passed. `ruff` is clean. No live run.
 
 ## Part 3: audit-log learning and L2
 
