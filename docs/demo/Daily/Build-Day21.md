@@ -413,6 +413,44 @@ Each needs a decision before Part 1. Each has a recommendation.
 - **Tests (vitest):** the `audit` payload → the waiting / found / timed-out view, on Day 20's recorded
   shapes.
 
+**As built:**
+
+- **`lib/learning.ts` (pure):**
+  - `defaultIntent`: the first of the last draft's intent, the plan's, then triage's, that isn't
+    `unknown`. Run 21's last draft *was* `unknown`, so the first version left the box empty;
+  - `INTENT_RE`, copied from the backend's `INTENT_RE` less `unknown`, which disables the button until the
+    slug is valid;
+  - `reviewHref`;
+  - `auditView(audit, draft)` → `idle | waiting | found | timed_out`. A Save-as-playbook draft isn't
+    offered as the audit one.
+- **`SavePlaybook.tsx`:** on a DONE run with `can_save_playbook`.
+  - It takes the intent and notes (one per line), then shows "Drafting… (about a minute)" and goes to
+    `/playbooks/{intent}?run={id}`.
+  - With an earlier draft on the run, it shows "Review the last draft →" next to "Draft again".
+- **`AuditDraft.tsx`:** on an ESCALATED run, or any run with an `audit`.
+  - **Idle:** a button.
+  - **Waiting:** "Waiting for the audit logs (usually 1-3 minutes, up to 10)…" with a timer.
+  - **Found:** Learned (each step's params) / Already undone / Can't learn (activity · time · reason), then
+    "Drafting…" until the draft lands, then "Review the draft → capped at A2".
+  - **Timed out:** "Look again".
+  - It's started as `TECHNICIANS[0]` and calls `reopen()` to follow the polling on the stream.
+- **Backend: the snapshot's `audit` gains `at`.** That's when that status was recorded. `since` is when the
+  run escalated, so a timer from `since` would have counted the hours before you clicked. Tested in
+  `test_audit.py`.
+- **Fixed in passing:** Part 3's edit had left `viewLink =(token` in `lib/api.ts`.
+
+**Checked against `data/tech.db`, with no draft or audit started:**
+
+- **Run 24:** Learned `user.update` (userId, jobTitle "Lot Supervisor"), then "Review the draft
+  (user.update_title) → capped at A2 (from audit logs)".
+- **Run 21:** Save as playbook, with "Draft again" and "Review the last draft". The review link 404s until
+  Part 5.
+
+**Result:**
+
+- Web: `npm test` (33: +8 in `learning.test.ts`), `typecheck`, `lint` and `build` are green.
+- Backend: `uv run pytest` 511 passed. `ruff` is clean.
+
 ## Part 5: `/playbooks/[intent]` review
 
 - Read `node_modules/next/dist/docs/` first.

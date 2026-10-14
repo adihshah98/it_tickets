@@ -13,7 +13,9 @@ import { DefinitionOfDone, Followups, Messages, TimeEntry, Links, NeedsTechnicia
 import { Execution } from "./Execution";
 import { InvestigationLog } from "./InvestigationLog";
 import { EscalationDiagnosis, LearnedBadge, NoPlaybookBanner } from "./Learning";
+import { AuditDraft } from "./AuditDraft";
 import { ManualStepPanel } from "./ManualStepPanel";
+import { SavePlaybook } from "./SavePlaybook";
 import { PlanSteps } from "./PlanSteps";
 import { Understood } from "./Understood";
 import { Section, StateBadge } from "./ui";
@@ -104,6 +106,8 @@ export default function Workspace() {
       {snap.outcome && (state === "ESCALATED" || !deciding) && <Outcome outcome={snap.outcome} planReason={snap.plan?.escalation_reason} />}
 
       {state === "ESCALATED" && consolePanel}
+      {(state === "ESCALATED" || snap.audit) && <AuditDraft snap={snap} onStarted={() => { reopen(); refresh(); }} />}
+      {state === "DONE" && snap.can_save_playbook && <SavePlaybook snap={snap} />}
 
       {view.errors.map((e) => (
         <p key={e.seq} className="rounded bg-red-50 p-2 font-mono text-xs text-red-900">{e.where}: {e.error}</p>

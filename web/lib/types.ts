@@ -85,8 +85,8 @@ export interface Snapshot {
   closeout: { checks: DoneCheck[]; messages: OutboundMessage[]; blocked: BlockedMessage[]; time_entry: TimeEntry | null };
   /** "Do it myself" steps (Build-Day20), not in the agent's plan. */
   technician_steps: TechnicianStep[];
-  /** "I fixed it in the admin center": the last audit_observed. */
-  audit: AuditObserved | null;
+  /** "I fixed it in the admin center": the last audit_observed, and when it was recorded. */
+  audit: (AuditObserved & { at: string }) | null;
   /** The last playbook drafted from this run, for the review screen. */
   playbook_draft: PlaybookDraft | null;
   can_save_playbook: boolean;

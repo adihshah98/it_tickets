@@ -152,6 +152,8 @@ async def test_the_audit_draft_route(rt, tenant, escalated, gated):  # noqa: F81
         await app.state.tasks.drain()
         shown = (await client.get(f"/runs/{escalated}")).json()
     assert shown["audit"]["status"] == "found" and shown["playbook_draft"]["source"] == "audit_log"
+    found = rt.store.last_event(escalated, "audit_observed")
+    assert shown["audit"]["at"] == found.created_at.isoformat()  # the web's waiting timer
 
 
 async def test_the_cli_shows_what_it_learned_and_what_it_cant(rt, tenant, escalated, capsys):  # noqa: F811

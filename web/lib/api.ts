@@ -1,7 +1,7 @@
 // Typed calls to the backend (backend/tech/api.py). The browser calls it directly; CORS allows this origin.
 
 import type { CatalogueAction, Observed } from "./console";
-import type { LinkView, RunSummary, Snapshot } from "./types";
+import type { LinkView, PlaybookSource, RunSummary, Snapshot } from "./types";
 
 export const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -63,7 +63,25 @@ export const manualStep = (id: number, by: string, action: string, params: Recor
 export const closeRun = (id: number, by: string, note: string | null) =>
   call<{ state: string }>(`/runs/${id}/close`, { by, note });
 
-export const viewLink =(token: string) => call<LinkView>(`/l/${encodeURIComponent(token)}`);
+// Learning a playbook (Build-Day19/20): drafts are recorded on the run as `playbook_drafted`.
+
+export interface DraftView {
+  intent: string;
+  yaml: string;
+  problems: string[];
+  ok: boolean;
+  source: PlaybookSource;
+  source_run_id: number | null;
+}
+
+/** "Save as playbook": one Opus call, awaited (about a minute). Nothing is saved until it's approved. */
+export const draftPlaybook = (id: number, intent: string | null, notes: string[]) =>
+  call<DraftView>(`/runs/${id}/playbook-draft`, { intent, notes });
+
+/** "I fixed it in the admin center": polls the audit logs in the background (up to 10 minutes), then drafts. */
+export const auditDraft = (id: number, by: string) => call<{ state: string }>(`/runs/${id}/audit-draft`, { by });
+
+export const viewLink = (token: string) => call<LinkView>(`/l/${encodeURIComponent(token)}`);
 
 export const revealLink = (token: string) =>
   call<LinkView & { temporaryAccessPass: string }>(`/l/${encodeURIComponent(token)}/reveal`, {});

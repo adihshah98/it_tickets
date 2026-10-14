@@ -219,8 +219,10 @@ def snapshot(store: Store, run_id: int, web_origin: str, domain: str, library: P
         "links": link_rows,
         "closeout": closeout.view(store, run_id, link_rows),
         "technician_steps": _technician_steps(store, run_id),
-        # "I fixed it in the admin center": waiting | found (with mapped/unmapped/undone) | timed_out
-        "audit": audit.payload if (audit := store.last_event(run_id, "audit_observed")) else None,
+        # "I fixed it in the admin center": waiting | found (with mapped/unmapped/undone) | timed_out; `at` is
+        # when that status was recorded (the waiting state's timer)
+        "audit": audit.payload | {"at": audit.created_at.isoformat()}
+                 if (audit := store.last_event(run_id, "audit_observed")) else None,
         "playbook_draft": draft.payload if (draft := store.last_event(run_id, "playbook_drafted")) else None,
         "can_save_playbook": runner.can_save_playbook(store, run_id),
         "no_playbook": _no_playbook(plan_event, triage, library),
