@@ -226,35 +226,31 @@ def investigator_model(case: dict[str, Any], plan: dict[str, Any]) -> FunctionMo
 
 def bypasses(events) -> list[str]:
     """Steps that ran without the gate's say-so: no gate_decision before them, a `block`, or an `approve`
-    with no approval before it. A follow-up's run (`<step>-run`) answers to its scheduling step's decision."""
+    with no approval before it. A follow-up's run (`<step>-run`) answers to its scheduling step's decision.
+    A technician's console step (actor technician:*, Build-Day20) satisfies its own `approve`: the person
+    is acting. It still needs a non-block decision for that step, made for a technician."""
     decisions: dict[str, str] = {}
     approved = False
     problems = []
     for e in events:
         p = e.payload
         if e.type == "gate_decision":
-            decisions[p["step_id"]] = p["decision"]
+            decisions[p["step_id"]] = (p["decision"], p.get("actor", "agent"))
         elif e.type == "approval" and p["decision"] == "approve":
             approved = True
         elif e.type == "step_started":
-            sid = p["step_id"]
-            decision = decisions.get(sid, decisions.get(sid.removesuffix("-run")))
+            sid, actor = p["step_id"], p.get("actor", "agent")
+            decision, decided_for = decisions.get(sid, decisions.get(sid.removesuffix("-run"), (None, None)))
+            technician = actor.startswith("technician:")
             if decision is None:
                 problems.append(f"{sid} ran with no gate decision")
             elif decision == "block":
                 problems.append(f"{sid} ran although the gate blocked it")
-            elif decision == "approve" and not approved:
+            elif technician and decided_for != actor:
+                problems.append(f"{sid} ran as {actor} on a decision made for {decided_for}")
+            elif decision == "approve" and not approved and not technician:
                 problems.append(f"{sid} needed approval and ran without one")
     return problems
-
-
-def transcript_of(events) -> Transcript:
-    t = Transcript()
-    for e in events:
-        if e.type == "tool_call":
-            t.record(e.payload["tool"], e.payload["args"], e.payload["result"] if e.payload["ok"] else None,
-                     e.payload["error"])
-    return t
 
 
 # ------------------------------------------------------------------ assertions
@@ -309,7 +305,7 @@ def check(case: dict[str, Any], expect: dict[str, Any], store: Store, run_id: in
         result = gate.evaluate(Plan.model_validate(plan), requester_approved=of["triage"][-1]["requester_approved"],
                                intents=triage["intents"], playbooks=load_playbooks(triage["intents"], DOMAIN),
                                facts=(facts := load_client_facts(DOMAIN)), autonomy=facts.autonomy, unproven=(),
-                               transcript=transcript_of(events))
+                               transcript=Transcript.from_events(events))
         got = {d.step_id: d.model_dump() for d in result.decisions}
         for sid, w in want.items():
             if sid not in got or decision_text(got[sid], w) != w:
@@ -579,3 +575,19 @@ def test_the_bypass_check_catches_each_kind_of_bypass():
     assert bypasses([*gated, E("approval", decision="approve"), E("step_started", step_id="b")]) == []
     assert bypasses([*gated, E("approval", decision="reject"), E("step_started", step_id="b")]) != []
     assert bypasses([*gated, E("step_started", step_id="a-run")]) == []  # a follow-up's run
+
+
+def test_the_bypass_check_lets_a_technician_approve_their_own_step():
+    class E:
+        def __init__(self, type, **payload):
+            self.type, self.payload = type, payload
+
+    me = "technician:aditya@x"
+    mine = E("gate_decision", step_id="t1", decision="approve", actor=me)
+    assert bypasses([mine, E("step_started", step_id="t1", actor=me)]) == []
+    # the agent can't ride on it, and a technician can't ride on an agent's approve decision
+    assert "without one" in bypasses([mine, E("step_started", step_id="t1")])[0]
+    agents = E("gate_decision", step_id="b", decision="approve")
+    assert "decision made for agent" in bypasses([agents, E("step_started", step_id="b", actor=me)])[0]
+    blocked = E("gate_decision", step_id="t2", decision="block", actor=me)
+    assert "blocked" in bypasses([blocked, E("step_started", step_id="t2", actor=me)])[0]

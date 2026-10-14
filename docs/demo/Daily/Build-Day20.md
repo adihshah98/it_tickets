@@ -17,7 +17,7 @@ Each part ends with green tests and a commit, then a stop for review.
 | Part | What | Behaviour change? |
 | ---- | ---- | ----------------- |
 | 0 | Spike: audit-log lag and filters (needs you in the Entra admin center) | None: **done**, lag ≤ 2.5 min |
-| 1 | Technician steps: transcript from events, confirming read, gate's technician path, executor `actor`, bypass check | New path; agent runs unchanged |
+| 1 | Technician steps: transcript from events, confirming read, gate's technician path, executor `actor`, bypass check | New path; agent runs unchanged: **done** |
 | 2 | Technician close-out, wider `can_save_playbook`, learning case **L1** | Escalated runs can close via a technician |
 | 3 | Audit-log learning: the read, `audit_map`, `from_audit_log`, the polling route, **L2** | New path; first to cut if behind |
 | 4 | Live: one console step on the tenant, and an audit draft from a real admin-center change | None |
@@ -267,6 +267,63 @@ The results go into this doc and settle decision 9's names and decision 11's tim
 - a non-ESCALATED run → refused;
 - the step's events carry `actor`, and agent step payloads are unchanged;
 - bypass check: a technician `approve` step without an approval passes, and an agent one still fails.
+
+**As built:**
+
+- **`runner.technician_step(rt, run_id, action, params, by)`** returns `(ok, step_id, error)`.
+  - A gate block or a failed verify is an *answer* (`ok: false`, with the reason).
+  - It refuses (`RunError`, a 409) **before recording anything** when:
+    - the run isn't ESCALATED;
+    - the action is unknown;
+    - the params don't validate;
+    - a param is a `$ref:`;
+    - a typed ID can't be confirmed.
+  - The actor is `technician:{email}`: a bare name gets the tenant's domain, through `runner.person()`,
+    which `accept` uses too now.
+  - Step IDs are `t1`, `t2`, …, counted from earlier technician gate decisions.
+- **The confirming read is `directoryObjects.get`**, in `reads.CONFIRM_READS`, which `fetch` falls back
+  to.
+  - It returns `{id, type, displayName}`, plus `userPrincipalName` for a user and `kind`/`roleAssignable`
+    for a group. So a typed privileged group is still caught by `group_problem`.
+  - It's recorded as a `tool_call` with `actor`. A failed one is recorded too, then refused.
+- **`gate.evaluate_technician`** follows decision 3.
+  - `client_facts.group_handling` still blocks: RDS-Users and VPN-Users stay "a technician's job outside
+    Graph", even in the console.
+  - The write bound counts all of the run's `step_started` events.
+- **`Execution.actor`:** `emit` adds `actor` to `step_*` events only when it isn't the agent. A test
+  checks that an agent run's step events have no `actor` key.
+- **Step events and gate decisions on a technician step** both carry `actor`. The bypass check requires
+  that a technician's step ran on a decision made *for that technician*, so an agent `approve` can't be
+  borrowed, and vice versa.
+- **`lint._file_problems` → `lint.file_problems`,** shared with the console for a file restore's IDs.
+- **`runner.observed_objects()` / `GET /runs/{id}/observed`:** the ID picker's list, which is named objects
+  from the reads plus files (drive, item, version list).
+- **`POST /runs/{id}/manual-step`** is awaited inline, and returns 409 if a background task is running on
+  the run. `tech step RUN ACTION key=value… --by NAME` reads values as JSON when they parse (`false`, `60`),
+  else as text. The CLI printer tags steps and gate decisions with `[technician:…]`.
+
+**Tests:**
+
+- `test_technician.py` (17):
+  - a step is gated, run and verified as the technician's, with no bypass, and the run stays ESCALATED;
+  - IDs go `t1` → `t2`;
+  - a privileged group → blocked, nothing written;
+  - `tap.create` → `technician.not_in_console`;
+  - a typed ID is confirmed by one read, and an unknown ID is refused with the failed read on record;
+  - unknown action / bad params / `$ref` → refused, nothing recorded;
+  - a non-ESCALATED run → refused;
+  - agent steps carry no `actor`;
+  - gate units: a revoke is allowed, RDS-Users is blocked, the write bound applies;
+  - `Transcript.from_events`;
+  - the route (ok, a block, 409, `observed`, 404);
+  - CLI param parsing.
+- `eval_harness`: a bypass test for technician actors.
+
+**Result:**
+
+- `uv run pytest`: 476 passed. `ruff` is clean.
+- Eval cases 1-28 are unchanged (agent gate decisions and event payloads).
+- No live run.
 
 ## Part 2: technician close-out and L1
 

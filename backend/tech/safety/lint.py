@@ -139,7 +139,7 @@ def lint(plan: Plan, transcript: Transcript, playbooks: dict[str, Playbook], fac
                 makers = " or ".join(sorted(PRODUCES.get(output, set()))) or "no action"
                 problems.append(f"Step {sid}: {text} must point to a {makers} step, not {earlier[target]}.")
         if action == "file.restoreVersion":
-            problems += [f"Step {sid}: {p}" for p in _file_problems(params, transcript)]
+            problems += [f"Step {sid}: {p}" for p in file_problems(params, transcript)]
 
         # 3. in scope
         if no_playbook and action not in allowed:
@@ -186,7 +186,7 @@ def _risk(spec: ActionSpec, params: dict[str, Any]) -> str | None:
         return None
 
 
-def _file_problems(params: dict[str, Any], transcript: Transcript) -> list[str]:
+def file_problems(params: dict[str, Any], transcript: Transcript) -> list[str]:
     """Rule 2 for a file restore: the IDs aren't GUIDs, so they're checked against the file reads."""
     file, version = (params.get("driveId"), params.get("itemId")), params.get("versionId")
     if file not in transcript.files:

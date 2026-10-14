@@ -20,6 +20,12 @@ has every write `approve` (autonomy.unproven) below A3. The risk-class rules alo
 reversible write unasked, so a learned playbook's A2 cap and its demotion to A2 would change nothing. A3
 (earned by a successful approved run, PlaybookLibrary.ceiling) is what lets it run hands-free.
 
+A technician's console step (Build-Day20, `evaluate_technician`): the person is acting themselves, so
+`approve` is satisfied by their action (technician.self). The catalogue, the group rules and the write
+bound still block; the no-playbook allow-list and A1 don't apply (escaping them is what the console is
+for). Credential, spend and data-access actions are blocked (technician.not_in_console) until the console
+has their flows (OOB and the one-time link, the seat purchase, a data-access approval).
+
 `evaluate` is pure. `check` records its result on a run: a gate_decision event per step, then the
 next state. The Day 5 runner calls `check` too.
 """
@@ -171,6 +177,36 @@ def evaluate(plan: Plan, *, requester_approved: bool, intents: Sequence[str], pl
                                       reason=reason, risk_class=risk))
     hold_reason = None if requester_approved else "the requester is not on the client's approver list for this request"
     return GateResult(decisions, held=not requester_approved, hold_reason=hold_reason)
+
+
+TECHNICIAN_BLOCKED: set[RiskClass] = {"security.credential", "spend", "data.access"}
+
+
+def evaluate_technician(step: StepBase, *, facts: ClientFacts, transcript: Transcript,
+                        writes_so_far: int) -> GateDecision:
+    """The gate for one technician console step. `writes_so_far` counts the run's earlier writes, agent and
+    technician, against MAX_WRITES."""
+    verdicts = _Verdicts()
+    risk: RiskClass | None = None
+    spec = ACTIONS.get(step.action)
+    if spec is None:
+        verdicts.add("block", "catalogue.unknown_action", f"{step.action} is not in the write catalogue")
+    else:
+        params = params_of(step)
+        typed = step.params if hasattr(step.params, "model_dump") else spec.params.model_validate(params)
+        risk = spec.risk(typed)
+        if step.action == "group.addMember" and (problem := group_problem(params["groupId"], transcript, facts)):
+            verdicts.add("block", *problem)
+        if risk in TECHNICIAN_BLOCKED:
+            verdicts.add("block", "technician.not_in_console",
+                         f"{risk} changes need a flow the console doesn't have yet; do this one in the admin center")
+        if writes_so_far >= MAX_WRITES:
+            verdicts.add("block", "bounds.writes_per_run", f"{writes_so_far} writes in this run already "
+                                                           f"(limit {MAX_WRITES})")
+        verdicts.add("approve", "technician.self", "the technician is making this change themselves")
+    decision, rule, reason = verdicts.final()
+    return GateDecision(step_id=step.id, action=step.action, decision=decision, rule_id=rule, reason=reason,
+                        risk_class=risk)
 
 
 def check(store: Store, run_id: int, plan: Plan, *, requester_approved: bool, intents: Sequence[str],

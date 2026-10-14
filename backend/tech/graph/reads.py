@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -83,6 +83,17 @@ class Transcript:
 
     def called(self, tool: str) -> bool:
         return any(c.tool == tool and c.error is None for c in self.calls)
+
+    @classmethod
+    def from_events(cls, events: Iterable[Any]) -> Transcript:
+        """A run's transcript rebuilt from its tool_call events (the investigator's and any confirming reads):
+        what a technician's console step is grounded against (Build-Day20)."""
+        transcript = cls()
+        for e in events:
+            if e.type == "tool_call":
+                p = e.payload
+                transcript.record(p["tool"], p["args"], p["result"] if p["ok"] else None, p["error"])
+        return transcript
 
 
 # ------------------------------------------------------------------ tools
@@ -290,6 +301,28 @@ READS: dict[str, ReadFn] = {
 }
 
 
+
+# ------------------------------------------------------------------ confirming reads (not the investigator's)
+
+
+async def directory_object(graph: GraphClient, object_id: str) -> dict:
+    """One user or group by ID: its type and name (and a group's kind). Confirms an ID a technician typed into
+    a console step (Build-Day20); there is no group read tool, so one generic read covers both."""
+    obj = await graph.get(f"/directoryObjects/{object_id}")
+    kind = obj.get("@odata.type", "").removeprefix("#microsoft.graph.")
+    out = {"id": obj.get("id"), "type": kind, "displayName": obj.get("displayName")}
+    if kind == "user":
+        out["userPrincipalName"] = obj.get("userPrincipalName")
+    elif kind == "group":
+        out |= {"kind": classify(obj), "roleAssignable": bool(obj.get("isAssignableToRole"))}
+    return out
+
+
+# Reads run for a person, never offered to the investigator (its tools are listed in agents/investigator.py).
+CONFIRM_READS: dict[str, ReadFn] = {
+    "directoryObjects.get": directory_object,
+}
+
 # ------------------------------------------------------------------ the MFA demo's clean sign-in history
 #
 # On the demo tenant Dennis's account and Authenticator are days old and his sign-ins come from wherever the
@@ -329,7 +362,7 @@ async def fetch(graph: GraphClient, tool: str, *, clean_sign_ins_for: str | None
     demo_sign_ins for that one user's signIns.list."""
     demo = (tool == "signIns.list" and clean_sign_ins_for is not None
             and str(args.get("user_id", "")).lower() == clean_sign_ins_for.lower())
-    return await (demo_sign_ins(graph, **args) if demo else READS[tool](graph, **args))
+    return await (demo_sign_ins(graph, **args) if demo else (READS.get(tool) or CONFIRM_READS[tool])(graph, **args))
 
 
 async def run_read(graph: GraphClient, transcript: Transcript, tool: str, *, clean_sign_ins_for: str | None = None,

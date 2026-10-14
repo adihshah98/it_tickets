@@ -9,6 +9,8 @@
     close-out runs once the steps verify (CLOSING): DoD probes, reply and PSA note, time entry; a failed
               DoD escalates. A failed DoD or step also demotes any playbook the run used at A3 to A2.
     draft_playbook  "Save as playbook" on a finished no-playbook run: the drafter's YAML, not yet saved.
+    technician_step "Do it myself" on an ESCALATED run: one catalogue action, grounded, gated (technician
+              path) and run by the executor with actor technician:{email}. The run stays ESCALATED.
 
 Each call can run in a new process (the CLI): what a run needs is rebuilt from its events: the plan
 from `plan`, the intents from `triage`, the approver's answers from `approval`, finished steps and
@@ -18,6 +20,7 @@ their outputs from `step_verified`. Every transition is checked against TRANSITI
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -35,17 +38,19 @@ from tech.agents.intake import run_intake
 from tech.agents.investigator import MODEL as INVESTIGATOR_MODEL
 from tech.agents.investigator import investigate
 from tech.core.config import REPO, Settings, ensure_link_key
-from tech.core.models import STEP_TYPES, Plan, Triage
+from tech.core.models import GUID_RE, STEP_TYPES, Plan, Triage, parse_ref
 from tech.core.observability import configure_logfire
 from tech.core.store import RunState, Store
 from tech.execution import mocks, scheduler
 from tech.execution.catalogue import ACTIONS, FOLLOWUP_ACTIONS
 from tech.execution.executor import Execution
-from tech.graph.client import GraphClient, graph_from_settings
+from tech.graph.client import GraphClient, GraphError, graph_from_settings
+from tech.graph.reads import Transcript, fetch
 from tech.graph.writes import SecretLeak
 from tech.learning.sources import from_run
 from tech.playbooks import ClientFacts, PlaybookLibrary, load_client_facts
 from tech.safety import gate
+from tech.safety.lint import file_problems
 
 S = RunState
 TERMINAL = {S.DONE, S.ESCALATED}
@@ -162,6 +167,88 @@ async def draft_playbook(rt: Runtime, run_id: int, *, intent: str | None = None,
     if intent:
         source = source.model_copy(update={"intent": intent})
     return await drafter.draft(rt.store, source, model=rt.drafter_model)
+
+
+# ------------------------------------------------------------------ technician console steps ("Do it myself")
+
+
+def person(by: str, domain: str) -> str:
+    """An email for whoever acted: a bare name gets the tenant's domain."""
+    by = by.strip().lower()
+    return by if "@" in by else f"{by}@{domain}".lower()
+
+
+def _strings(value: Any) -> list[str]:
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in _strings(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in _strings(v)]
+    return [value] if isinstance(value, str) else []
+
+
+async def technician_step(rt: Runtime, run_id: int, action: str, params: dict[str, Any], *,
+                          by: str) -> tuple[bool, str, str | None]:
+    """Run one catalogue action for a technician on an ESCALATED run (Build-Day20). Returns (ok, step_id,
+    error): a gate block or a failed verify is an answer, not an exception. Refused (RunError) before anything
+    is recorded: the wrong state, an unknown action, params that don't validate, a `$ref`, or an ID that
+    isn't in the run's reads and that a confirming read can't find."""
+    state = rt.store.get_run(run_id).state
+    if state != S.ESCALATED:
+        raise RunError(f"run {run_id} is {state}; a technician works on an ESCALATED run")
+    spec = ACTIONS.get(action)
+    if spec is None:
+        raise RunError(f"{action} is not in the write catalogue")
+    if any(parse_ref(s) for s in _strings(params)):
+        raise RunError("a console step stands alone: use IDs, not $ref: references to other steps")
+    actor = f"technician:{person(by, rt.domain)}"
+    taken = [e for e in rt.store.events_of(run_id, "gate_decision")
+             if e.payload.get("actor", "").startswith("technician")]
+    try:
+        typed = spec.params.model_validate(params)
+        step = STEP_TYPES[action].model_validate({
+            "id": f"t{len(taken) + 1}", "action": action, "params": params, "expected": {},
+            "rationale": f"done by {actor} in the console", "risk_class": spec.risk(typed)})
+    except ValidationError as exc:
+        raise RunError(f"params don't fit {action}: {exc.errors()[0]['msg']}") from exc
+
+    transcript = Transcript.from_events(rt.store.events(run_id))
+    step_params = step.params.model_dump(mode="json", by_alias=True)
+    for guid in sorted({g.lower() for g in GUID_RE.findall(json.dumps(step_params))} - transcript.observed_ids):
+        await _confirm(rt, run_id, transcript, guid, actor)
+    if action == "file.restoreVersion" and (problems := file_problems(step_params, transcript)):
+        raise RunError(" ".join(problems))
+
+    writes = len(rt.store.events_of(run_id, "step_started"))
+    decision = gate.evaluate_technician(step, facts=rt.facts, transcript=transcript, writes_so_far=writes)
+    rt.store.append_event(run_id, "gate_decision", decision.model_dump(mode="json") | {"actor": actor})
+    if decision.decision == "block":
+        return False, step.id, decision.reason
+    execution = Execution(rt.store, run_id, rt.graph, rt.domain, link_key=rt.link_key, sleep=rt.sleep, actor=actor)
+    ok, _, error = await execution.run_step(step, {})
+    return ok, step.id, error
+
+
+async def _confirm(rt: Runtime, run_id: int, transcript: Transcript, guid: str, actor: str) -> None:
+    """One read that grounds an ID the technician typed: recorded as a tool_call like the investigator's."""
+    args = {"object_id": guid}
+    try:
+        result = await fetch(rt.graph, "directoryObjects.get", **args)
+    except GraphError as exc:
+        error = f"{exc.status} {exc.code}: {exc.message}"
+        rt.store.append_event(run_id, "tool_call", {"tool": "directoryObjects.get", "args": args, "ok": False,
+                                                    "error": error, "result": None, "t": 0.0, "actor": actor})
+        raise RunError(f"{guid} isn't a user or group in the tenant ({error})") from exc
+    rt.store.append_event(run_id, "tool_call", {"tool": "directoryObjects.get", "args": args, "ok": True,
+                                                "error": None, "result": result, "t": 0.0, "actor": actor})
+    transcript.record("directoryObjects.get", args, result)
+
+
+def observed_objects(store: Store, run_id: int) -> list[dict[str, Any]]:
+    """The users, groups and files this run's reads saw, for the console's ID picker."""
+    transcript = Transcript.from_events(store.events(run_id))
+    objects = [{"id": oid} | seen for oid, seen in sorted(transcript.objects.items()) if seen.get("displayName")]
+    files = [{"driveId": d, "itemId": i, "versions": v} for (d, i), v in transcript.files.items()]
+    return objects + files
 
 
 # ------------------------------------------------------------------ out-of-band confirmation (MFA reset)
@@ -284,9 +371,7 @@ def accept(rt: Runtime, run_id: int, *, by: str, answers: dict[str, str] | None 
     state = rt.store.get_run(run_id).state
     if state not in (S.AWAITING_APPROVAL, S.HELD):
         raise RunError(f"run {run_id} is {state}; only AWAITING_APPROVAL or HELD runs can be approved")
-    by = by.strip().lower()
-    if not by.count("@"):
-        by = f"{by}@{rt.domain}".lower()
+    by = person(by, rt.domain)
     missing = [s for s in approval_scopes(rt.store, run_id, rt.facts) if not rt.facts.is_approver(by, s)]
     if missing:
         raise RunError(f"{by} is not on the client's approver list for {', '.join(missing)}")

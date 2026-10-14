@@ -6,6 +6,7 @@
     uv run tech oob 7 --by tgarcia                       # MFA reset: "Manager confirmed via SMS" (mocked)
     uv run tech resume 7                                 # carry on an execution a crashed process left
     uv run tech followup list 7 | run 3                  # scheduled follow-ups; "run now"
+    uv run tech step 21 group.addMember groupId=… userId=… --by aditya   # "Do it myself" on an ESCALATED run
     uv run tech save-playbook 20 --by aditya [--intent file.restore_version] [--autonomy A3] [--yes]
 
 `run` triages, investigates (linter in the loop), gates and, with nothing to approve, executes.
@@ -35,6 +36,7 @@ from tech.playbooks import PlaybookRejected
 
 def show(event: Event) -> None:
     p = event.payload
+    by = f"  [{p['actor']}]" if p.get("actor") else ""  # a technician's console step; absent = the agent
     match event.type:
         case "state":
             label = f"{p['kind']}: " if p.get("kind") else ""
@@ -62,15 +64,15 @@ def show(event: Event) -> None:
             for problem in p["problems"]:
                 print(f"       - {problem}", flush=True)
         case "gate_decision":
-            print(f"   {p['step_id']:<24} {p['action']:<18} {p['decision']:<8} {p['rule_id']}", flush=True)
+            print(f"   {p['step_id']:<24} {p['action']:<18} {p['decision']:<8} {p['rule_id']}{by}", flush=True)
         case "approval":
             answers = "  " + ", ".join(f"{k}={v}" for k, v in p["answers"].items()) if p["answers"] else ""
             print(f"   {p['decision']}d by {p['by']}{answers}", flush=True)
         case "step_started":
-            print(f"   [{p['t']:5.1f}s] -> {p['step_id']:<24} {p['action']}", flush=True)
+            print(f"   [{p['t']:5.1f}s] -> {p['step_id']:<24} {p['action']}{by}", flush=True)
         case "step_verified":
             skipped = f"  (skipped: {p['skipped']})" if p.get("skipped") else ""
-            print(f"   [{p['t']:5.1f}s] ok {p['step_id']:<24} {p['action']}{skipped}", flush=True)
+            print(f"   [{p['t']:5.1f}s] ok {p['step_id']:<24} {p['action']}{skipped}{by}", flush=True)
         case "step_failed":
             print(f"   [{p['t']:5.1f}s] FAILED {p['step_id']:<20} {p['action']}  {p['error']}", flush=True)
         case "done_check":
@@ -182,6 +184,20 @@ async def save_playbook(rt: runner.Runtime, run_id: int, *, by: str, intent: str
     return 0
 
 
+def parse_params(pairs: list[str]) -> dict[str, object]:
+    """key=value pairs; a value that reads as JSON (false, 3, ["a"]) is taken as that, else as text."""
+    params: dict[str, object] = {}
+    for pair in pairs:
+        key, sep, value = pair.partition("=")
+        if not sep:
+            raise SystemExit(f"params are key=value, not {pair!r}")
+        try:
+            params[key.strip()] = json.loads(value)
+        except json.JSONDecodeError:
+            params[key.strip()] = value
+    return params
+
+
 def parse_answers(pairs: list[str]) -> dict[str, str]:
     answers = {}
     for pair in pairs:
@@ -212,6 +228,11 @@ def main() -> None:
     followup_p = sub.add_parser("followup", help="list a run's follow-ups, or run one now")
     followup_p.add_argument("action", choices=["list", "run"])
     followup_p.add_argument("id", type=int, help="run id for list, follow-up id for run")
+    step_p = sub.add_parser("step", help="run one catalogue action yourself on an ESCALATED run")
+    step_p.add_argument("run_id", type=int)
+    step_p.add_argument("action", help="a catalogue action, e.g. group.addMember")
+    step_p.add_argument("params", nargs="*", metavar="KEY=VALUE")
+    step_p.add_argument("--by", required=True, help="the technician")
     save_p = sub.add_parser("save-playbook", help="draft a playbook from a finished no-playbook run, and save it")
     save_p.add_argument("run_id", type=int)
     save_p.add_argument("--by", required=True, help="who approves the playbook")
@@ -241,6 +262,14 @@ def main() -> None:
             code = asyncio.run(continue_run(args.run_id, lambda rt: runner.resume(rt, args.run_id)))
         case "followup":
             code = asyncio.run(followups(args.action, args.id))
+        case "step":
+            params = parse_params(args.params)
+
+            async def step(rt: runner.Runtime) -> None:
+                ok, step_id, error = await runner.technician_step(rt, args.run_id, args.action, params, by=args.by)
+                print(f"   {step_id}: {'verified' if ok else 'not done: ' + (error or '')}", flush=True)
+
+            code = asyncio.run(continue_run(args.run_id, step))
         case "save-playbook":
             code = asyncio.run(with_runtime(lambda rt: save_playbook(
                 rt, args.run_id, by=args.by, intent=args.intent, autonomy=args.autonomy, yes=args.yes)))

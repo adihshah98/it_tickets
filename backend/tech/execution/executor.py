@@ -14,7 +14,8 @@ For each step:
 Transient Graph errors are retried by the client (429, 5xx, replication lag). Each wait, the client's or a
 verify poll's, is a step_retry event, which the workspace shows as "↻ retried". Anything else, a verify
 mismatch, or a Deviation stops the run with a step_failed event; the runner escalates it (no replanner
-until Week 3). Every payload passes `Secrets.guard` before it is appended.
+until Week 3). Every payload passes `Secrets.guard` before it is appended. A technician's console step
+runs through the same `run_step`, its step events carrying `actor` (absent = the agent).
 """
 
 from __future__ import annotations
@@ -126,8 +127,11 @@ class Execution:
     link_key: str | None = None
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     t0: float = field(default_factory=time.monotonic)
+    actor: str = "agent"  # or technician:{email} for a console step (Build-Day20)
 
     def emit(self, type: str, payload: dict[str, Any]) -> None:
+        if self.actor != "agent" and type.startswith("step_"):
+            payload = payload | {"actor": self.actor}  # absent means the agent, so agent payloads don't change
         self.secrets.guard(payload)
         self.store.append_event(self.run_id, type, payload | {"t": round(time.monotonic() - self.t0, 1)})
 

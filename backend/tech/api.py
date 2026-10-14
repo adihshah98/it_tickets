@@ -9,6 +9,8 @@
     POST /runs/{id}/approval         approve (with confirm answers) or reject; executes in the background
     POST /runs/{id}/resume           carry on an execution a dead process left in EXECUTING
     POST /followups/{id}/run-now     run a scheduled follow-up now (the demo's license assignment)
+    POST /runs/{id}/manual-step      "Do it myself": one catalogue action by a technician on an ESCALATED run
+    GET  /runs/{id}/observed         the users, groups and files the run's reads saw (the console's ID picker)
     POST /runs/{id}/playbook-draft   "Save as playbook": the drafter's YAML from a finished run (not saved)
     POST /playbooks                  a written playbook (prose or YAML) -> a draft (not saved)
     POST /playbooks/{intent}/approve save a draft (as edited) as the intent's next version, at an autonomy level
@@ -232,6 +234,12 @@ class OobIn(BaseModel):
     by: str  # the technician who reached the manager
 
 
+class ManualStepIn(BaseModel):
+    action: str
+    params: dict[str, Any]
+    by: str = Field(min_length=1)
+
+
 class DraftIn(BaseModel):
     intent: str | None = None  # names the job when the proposed one is wrong or "unknown"
     notes: list[str] = []      # the technician's
@@ -370,6 +378,18 @@ def create_app(runtime: runner.Runtime | None = None, *, web_origin: str = DEFAU
         # a failed follow-up is reported on the run's stream; it doesn't escalate a finished run
         tasks.spawn(row.run_id, runner.run_followup(rt, followup_id), what="followup", escalate=False)
         return {"followup_id": followup_id, "run_id": row.run_id}
+
+    @app.post("/runs/{run_id}/manual-step")
+    async def manual_step(run_id: int, body: ManualStepIn) -> dict[str, Any]:
+        """Awaited, not a background task: one step, and the technician waits for its verify."""
+        if tasks.busy(run_id):
+            raise runner.RunError(f"run {run_id} has work running; wait for it to finish")
+        ok, step_id, error = await runner.technician_step(rt, run_id, body.action, body.params, by=body.by)
+        return {"ok": ok, "step_id": step_id, "error": error, "state": rt.store.get_run(run_id).state.value}
+
+    @app.get("/runs/{run_id}/observed")
+    async def observed(run_id: int = Depends(existing_run)) -> list[dict[str, Any]]:
+        return runner.observed_objects(rt.store, run_id)
 
     @app.post("/runs/{run_id}/playbook-draft")
     async def playbook_draft(run_id: int, body: DraftIn) -> dict[str, Any]:

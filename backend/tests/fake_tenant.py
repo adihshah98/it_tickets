@@ -252,6 +252,12 @@ class FakeTenant:
                                   "properties: 'owners'.")
             owners.add(uid)
             return httpx.Response(204)
+        if method == "GET" and (m := re.fullmatch(r"/directoryObjects/([^/]+)", path)):
+            if user := self.users.get(m.group(1)):
+                return httpx.Response(200, json={"@odata.type": "#microsoft.graph.user"} | user)
+            if m.group(1).lower() in self.groups:
+                return httpx.Response(200, json=self.groups[m.group(1).lower()])
+            return error(404, f"Resource '{m.group(1)}' does not exist", "Request_ResourceNotFound")
         m = re.fullmatch(r"/users/([^/]+)(/.*)?", path)
         if not m:
             return error(404, f"no route {method} {path}", "NotFound")
