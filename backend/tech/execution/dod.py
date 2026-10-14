@@ -20,7 +20,7 @@ from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass, field
 from typing import Any
 
-from tech.core.models import Plan
+from tech.core.models import Plan, parse_ref
 from tech.core.store import Store
 from tech.execution import links, scheduler
 from tech.execution.catalogue import ACTIONS
@@ -172,13 +172,26 @@ async def user_has_sku(ctx: DodContext, args: dict[str, Any]) -> Probe:
 
 @probe("user_in_groups")
 async def user_in_groups(ctx: DodContext, args: dict[str, Any]) -> Probe:
-    if (user := ctx.new_user()) is None:
-        return Probe("user_in_groups", False, NO_USER)
-    if not (want := ctx.mirrored_groups()):
-        return Probe("user_in_groups", True, "the plan mirrors no groups")
-    have = await ctx.settled(lambda: member_group_ids(ctx.graph, user["id"]), lambda ids: set(want) <= ids)
-    missing = [f"{name} ({gid})" if name.lower() != gid else gid for gid, name in want.items() if gid not in have]
-    return Probe("user_in_groups", not missing, f"not in {', '.join(missing)}" if missing else f"in all {len(want)}")
+    """The plan's group adds hold. Onboarding: the new user is in every mirrored group. With no user.create (a
+    learned group-add playbook, Build-Day20 live): each group.addMember step's own user is in its group."""
+    if (user := ctx.new_user()) is not None:
+        if not (want := ctx.mirrored_groups()):
+            return Probe("user_in_groups", True, "the plan mirrors no groups")
+        targets = {user["id"]: want}
+    else:
+        targets: dict[str, dict[str, str]] = {}
+        for s in ctx.plan.steps:
+            if s.action == "group.addMember" and parse_ref(s.params.userId) is None:
+                name = s.params.groupName or s.params.groupId
+                targets.setdefault(s.params.userId, {})[s.params.groupId.lower()] = name
+        if not targets:
+            return Probe("user_in_groups", False, NO_USER)
+    missing = []
+    for uid, want in targets.items():
+        have = await ctx.settled(lambda uid=uid: member_group_ids(ctx.graph, uid), lambda ids, w=want: set(w) <= ids)
+        missing += [f"{name} ({gid})" if name.lower() != gid else gid for gid, name in want.items() if gid not in have]
+    total = sum(len(w) for w in targets.values())
+    return Probe("user_in_groups", not missing, f"not in {', '.join(missing)}" if missing else f"in all {total}")
 
 
 @probe("tap_active")

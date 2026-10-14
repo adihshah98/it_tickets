@@ -1,8 +1,8 @@
 """DoD probes against the fake tenant: what passes after a clean run, and each way a check fails."""
 
-from conftest import DOMAIN, FINANCE_FILES, MARCUS, RDS_USERS, SOPHIE, TAYLOR, group, plan_with
+from conftest import ACCOUNTING, DOMAIN, FINANCE_FILES, MARCUS, RDS_USERS, SOPHIE, TAYLOR, group, plan_with, step
 
-from tech.core.models import TechnicianItem
+from tech.core.models import Plan, TechnicianItem
 from tech.execution import dod
 from tech.playbooks import load_playbook
 
@@ -50,6 +50,26 @@ async def test_user_in_groups_rereads_while_the_directory_lags(rt, executed, ten
     probe = (await dod.check(ctx(rt, run_id, plan), playbook(), only=("user_in_groups",)))[0]
     assert probe.ok, probe.detail
     assert sleeps == [2.0, 4.0]
+
+
+async def test_user_in_groups_checks_each_step_s_user_when_none_was_created(rt, gated, tenant):
+    """A learned group-add playbook (Build-Day20 live): no user.create, so each group.addMember step's own
+    user must be in its group. Before, the probe failed every such run with "no user was created"."""
+    tenant.add_group(FINANCE_FILES, "Finance Files", "security")
+    tenant.add_group(ACCOUNTING, "Accounting", "m365")
+    plan = Plan.model_validate({"intent": "site.grant_access", "summary": "add Marcus", "steps": [
+        step("add", "group.addMember", {"groupId": FINANCE_FILES, "userId": MARCUS, "groupName": "Finance Files"},
+             "write.reversible")]})
+    run_id = gated()
+    check = dod.check(ctx(rt, run_id, plan), playbook(), only=("user_in_groups",))
+
+    assert not (await check)[0].ok  # not a member yet
+    tenant.members.setdefault(FINANCE_FILES, set()).add(MARCUS)
+    probe = (await dod.check(ctx(rt, run_id, plan), playbook(), only=("user_in_groups",)))[0]
+    assert probe.ok and probe.detail == "in all 1"
+
+    nothing = plan.model_copy(update={"steps": []})  # no user and no group add: still a failure, as before
+    assert not (await dod.check(ctx(rt, run_id, nothing), playbook(), only=("user_in_groups",)))[0].ok
 
 
 async def test_a_missing_group_still_fails_after_the_rereads(rt, executed, tenant, sleeps):
