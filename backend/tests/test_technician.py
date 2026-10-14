@@ -224,6 +224,24 @@ async def test_the_manual_step_route(rt, tenant, escalated, gated):
         assert (await client.get("/runs/999/observed")).status_code == 404
 
 
+def test_observed_files_carry_their_name_and_version_times(rt, escalated):
+    """The console's file picker shows names and times, not SharePoint IDs (Build-Day21 part 3)."""
+    hit = {"site": "Accounting", "drive_id": "b!drive", "item_id": "01ITEM", "name": "Q3 Parking Rates.xlsx",
+           "lastModified": "2026-10-13T09:05:00Z"}
+    versions = [{"id": "2.0", "time": "2026-10-13T09:05:00Z", "size": 12606, "by": "SharePoint App"},
+                {"id": "1.0", "time": "2026-10-12T16:45:00Z", "size": 12755, "by": "SharePoint App"}]
+    for tool, args, result in [("files.search", {"query": "Q3"}, [hit]),
+                               ("files.versions", {"drive_id": "b!drive", "item_id": "01ITEM"}, versions)]:
+        rt.store.append_event(escalated, "tool_call", {"tool": tool, "args": args, "ok": True, "error": None,
+                                                       "result": result, "t": 1.0})
+
+    [file] = [o for o in runner.observed_objects(rt.store, escalated) if "driveId" in o]
+    assert file == {"driveId": "b!drive", "itemId": "01ITEM", "versions": ["2.0", "1.0"],
+                    "name": "Q3 Parking Rates.xlsx", "site": "Accounting",
+                    "versionDetails": [{"id": "2.0", "time": "2026-10-13T09:05:00Z", "size": 12606},
+                                       {"id": "1.0", "time": "2026-10-12T16:45:00Z", "size": 12755}]}
+
+
 def test_cli_params_read_json_values_and_text():
     assert parse_params(["userId=abc", "accountEnabled=false", "lifetimeInMinutes=60", 'tags=["a"]']) == {
         "userId": "abc", "accountEnabled": False, "lifetimeInMinutes": 60, "tags": ["a"]}

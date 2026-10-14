@@ -350,6 +350,58 @@ Each needs a decision before Part 1. Each has a recommendation.
   - empty optionals are dropped;
   - ID kinds filter `observed`.
 
+**As built:**
+
+- **`lib/console.ts`:**
+  - `fields(action)` reads `anyOf: [X, null]` as an optional X;
+  - `driveId` and `itemId` become **one file picker** (value `drive|item`), and `versionId` a version
+    picker filled once the file is picked, with the newest marked "current";
+  - `groupName` and `fileName` are left off the form (`AUTO_FILLED`): the backend names the group, and
+    `toParams` sets `fileName` from the file picked;
+  - a boolean is a Yes / No / "Leave as is" select, so `user.update` doesn't send `accountEnabled` unless
+    you choose it;
+  - `toParams` drops empty optionals and lists the empty required fields, which disables Run.
+- **Found while building: the file picker had only SharePoint IDs.** `observed` gave a file as `{driveId,
+  itemId, versions}`. Now `runner.observed_objects` adds `name` and `site` from the run's `files.search`
+  results, and `versionDetails` (id, time, size) from `files.versions`. The picker shows "Q3 Parking
+  Rates.xlsx · Northwind Operations" and "2.0 · 13/10 21:58 · 12.8 KB". `versions` keeps its shape. This
+  is a small backend change, with a test.
+- **`ManualStepPanel.tsx`:**
+  - "Working as" (`TECHNICIANS = ["aditya"]`);
+  - the action picker shows console actions with their risk class and "Verified by: …";
+  - an ID field is a select of observed users, groups or SKUs, plus "Type an ID…", which gives a text box
+    (the backend runs the confirming read);
+  - Run waits for verify, then shows "t1: … verified" or "not done: {reason}". A 409 shows as "Refused:
+    …";
+  - the console steps (✔ / ⊘ blocked / ✖ failed) carry "by {name}", the rule and collapsed params;
+  - Close (with a PSA note) appears once a step has verified. It calls `reopen()` to follow the close-out
+    on the stream.
+  - `observed` is re-fetched after each step, because a typed ID's confirming read adds to it.
+- **Where it shows:** under the diagnosis while ESCALATED. Once the run has closed, it moves to the
+  execution's place, so a console run reads step → definition of done → reply. The first placement put
+  the steps after their own close-out, which read backwards on run 21.
+- **`useRun` / `REFRESH_ON`:**
+  - `audit_observed` and `playbook_demoted` are added to the stream's event types;
+  - `audit_observed`, `playbook_drafted`, `playbook_approved` and `playbook_demoted` now refresh the
+    snapshot;
+  - `tool_call` was considered and left out: it would refresh on every investigation read.
+- **Fixtures:** `tests/fixtures/catalogue.json` (`GET /catalogue`) and `observed-run20.json` (run 20's
+  `observed`), so the tests use the backend's real schemas. Like `onboard.sse`, they hold the demo
+  tenant's IDs and UPNs.
+
+**Checked against `data/tech.db`, with no Run or Close clicked** (those write to the tenant, which is Part
+7):
+
+- **Run 24:** picked `user.update` → User = "Jordan Lee (jlee@…)" from the reads, Job title "Lot
+  Supervisor", and the optional fields marked. Run was enabled.
+- **Run 21:** the console step reads "✔ group.addMember t1 verified · by aditya · technician.self", before
+  the definition of done and the reply.
+
+**Result:**
+
+- Web: `npm test` (25: +11 in `console.test.ts`), `typecheck`, `lint` and `build` are green.
+- Backend: `uv run pytest` 511 passed (+1). `ruff` is clean.
+
 ## Part 4: Save as playbook, and the admin center
 
 - `SavePlaybook.tsx`: the intent and notes, then draft, then navigate (decision 10).

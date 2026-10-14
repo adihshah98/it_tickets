@@ -343,10 +343,26 @@ async def audit_draft(rt: Runtime, run_id: int, *, by: str) -> drafter.Draft | N
 
 
 def observed_objects(store: Store, run_id: int) -> list[dict[str, Any]]:
-    """The users, groups and files this run's reads saw, for the console's ID picker."""
-    transcript = Transcript.from_events(store.events(run_id))
+    """The users, groups and files this run's reads saw, for the console's ID picker. A file carries its name
+    and site from files.search, and each version's time and size from files.versions, so a technician picks
+    "Q3 Parking Rates.xlsx, 2.0 (yesterday 16:45, 12.7 KB)" rather than SharePoint IDs."""
+    events = store.events(run_id)
+    transcript = Transcript.from_events(events)
     objects = [{"id": oid} | seen for oid, seen in sorted(transcript.objects.items()) if seen.get("displayName")]
-    files = [{"driveId": d, "itemId": i, "versions": v} for (d, i), v in transcript.files.items()]
+    hits: dict[tuple[str, str], dict[str, Any]] = {}
+    details: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for e in events:
+        p = e.payload
+        if e.type != "tool_call" or not p["ok"]:
+            continue
+        if p["tool"] == "files.search":
+            for hit in p["result"] or []:
+                hits[(hit["drive_id"], hit["item_id"])] = {k: hit.get(k) for k in ("name", "site")}
+        elif p["tool"] == "files.versions":
+            details[(p["args"]["drive_id"], p["args"]["item_id"])] = [
+                {k: v.get(k) for k in ("id", "time", "size")} for v in p["result"] or []]
+    files = [{"driveId": d, "itemId": i, "versions": v} | hits.get((d, i), {"name": None, "site": None})
+             | {"versionDetails": details.get((d, i), [])} for (d, i), v in transcript.files.items()]
     return objects + files
 
 

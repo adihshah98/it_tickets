@@ -1,0 +1,53 @@
+[
+ {
+  "id": "619403f7-e261-4048-892e-4f3ee8125caa",
+  "displayName": "Northwind Operations",
+  "kind": "m365",
+  "roleAssignable": false
+ },
+ {
+  "id": "97fbfe65-a8c2-4094-bc34-e1842aa3d038",
+  "displayName": "Northwind Parking",
+  "kind": "m365",
+  "roleAssignable": false
+ },
+ {
+  "id": "a55f62f7-a1fe-4314-8d61-88d40f8cfd54",
+  "displayName": "Accounting",
+  "kind": "m365",
+  "roleAssignable": false
+ },
+ {
+  "id": "eabb4284-1ebd-4688-9334-fe6a2bf58881",
+  "displayName": "Sophie Baker",
+  "userPrincipalName": "sbaker@NorthwindParking.onmicrosoft.com"
+ },
+ {
+  "driveId": "b!H-i7YY5pVEqXQkPXRsnUJLuxRunmPO1KtzAS0DsA2RAXToSyhvzRTppnO_EhlcHb",
+  "itemId": "01A7DRABJ3CWDJ6J3IRRB3D6DUOTYFTEBC",
+  "versions": [
+   "3.0",
+   "2.0",
+   "1.0"
+  ],
+  "name": "Q3 Parking Rates.xlsx",
+  "site": "Northwind Operations",
+  "versionDetails": [
+   {
+    "id": "3.0",
+    "time": "2026-10-13T20:59:38Z",
+    "size": 12608
+   },
+   {
+    "id": "2.0",
+    "time": "2026-10-13T20:58:59Z",
+    "size": 12760
+   },
+   {
+    "id": "1.0",
+    "time": "2026-10-13T20:58:56Z",
+    "size": 12717
+   }
+  ]
+ }
+]

@@ -1,0 +1,776 @@
+[
+ {
+  "name": "user.create",
+  "risk_class": "write.reversible",
+  "verify": "GET /users/{id}: exists, usageLocation and the created properties match",
+  "compensate": "DELETE /users/{id} (soft delete, restorable for 30 days)",
+  "params": {
+   "additionalProperties": false,
+   "properties": {
+    "displayName": {
+     "title": "Displayname",
+     "type": "string"
+    },
+    "givenName": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Givenname"
+    },
+    "surname": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Surname"
+    },
+    "userPrincipalName": {
+     "pattern": "^[^@\\s]+@[^@\\s]+$",
+     "title": "Userprincipalname",
+     "type": "string"
+    },
+    "mailNickname": {
+     "title": "Mailnickname",
+     "type": "string"
+    },
+    "department": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Department"
+    },
+    "jobTitle": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Jobtitle"
+    },
+    "usageLocation": {
+     "description": "Two-letter country code, from client facts",
+     "pattern": "^[A-Z]{2}$",
+     "title": "Usagelocation",
+     "type": "string"
+    },
+    "accountEnabled": {
+     "default": true,
+     "title": "Accountenabled",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "displayName",
+    "userPrincipalName",
+    "mailNickname",
+    "usageLocation"
+   ],
+   "title": "UserCreateParams",
+   "type": "object"
+  },
+  "console": true
+ },
+ {
+  "name": "user.update",
+  "risk_class": "write.reversible",
+  "verify": "GET /users/{userId}: changed properties match",
+  "compensate": "PATCH /users/{userId} back to the snapshot",
+  "params": {
+   "additionalProperties": false,
+   "properties": {
+    "userId": {
+     "description": "An object ID you observed in a tool result, or '$ref:<step id>.output.id' for an object an earlier step creates",
+     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|\\$ref:[A-Za-z0-9_-]+\\.output\\.id)$",
+     "title": "Userid",
+     "type": "string"
+    },
+    "usageLocation": {
+     "anyOf": [
+      {
+       "pattern": "^[A-Z]{2}$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Usagelocation"
+    },
+    "accountEnabled": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Accountenabled"
+    },
+    "department": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Department"
+    },
+    "jobTitle": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Jobtitle"
+    },
+    "displayName": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Displayname"
+    }
+   },
+   "required": [
+    "userId"
+   ],
+   "title": "UserUpdateParams",
+   "type": "object"
+  },
+  "console": true
+ },
+ {
+  "name": "license.purchase",
+  "risk_class": "spend",
+  "verify": "GET /subscribedSkus: available seats for skuId >= 1",
+  "compensate": "mock: return the seat to seat-holder",
+  "params": {
+   "additionalProperties": false,
+   "properties": {
+    "skuId": {
+     "description": "An object ID you observed in a tool result",
+     "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+     "title": "Skuid",
+     "type": "string"
+    },
+    "skuPartNumber": {
+     "title": "Skupartnumber",
+     "type": "string"
+    },
+    "quantity": {
+     "default": 1,
+     "maximum": 10,
+     "minimum": 1,
+     "title": "Quantity",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "skuId",
+    "skuPartNumber"
+   ],
+   "title": "LicensePurchaseParams",
+   "type": "object"
+  },
+  "console": false
+ },
+ {
+  "name": "license.assign",
+  "risk_class": "write.reversible",
+  "verify": "GET /users/{userId}/licenseDetails: has skuId",
+  "compensate": "POST /users/{userId}/assignLicense with removeLicenses=[skuId]",
+  "params": {
+   "additionalProperties": false,
+   "properties": {
+    "userId": {
+     "description": "An object ID you observed in a tool result, or '$ref:<step id>.output.id' for an object an earlier step creates",
+     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|\\$ref:[A-Za-z0-9_-]+\\.output\\.id)$",
+     "title": "Userid",
+     "type": "string"
+    },
+    "skuId": {
+     "description": "An object ID you observed in a tool result",
+     "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+     "title": "Skuid",
+     "type": "string"
+    },
+    "skuPartNumber": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Skupartnumber"
+    }
+   },
+   "required": [
+    "userId",
+    "skuId"
+   ],
+   "title": "LicenseAssignParams",
+   "type": "object"
+  },
+  "console": true
+ },
+ {
+  "name": "group.addMember",
+  "risk_class": "write.reversible",
+  "verify": "GET /users/{userId}/memberOf: contains groupId",
+  "compensate": "DELETE /groups/{groupId}/members/{userId}/$ref",
+  "params": {
+   "additionalProperties": false,
+   "properties": {
+    "groupId": {
+     "description": "An object ID you observed in a tool result",
+     "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+     "title": "Groupid",
+     "type": "string"
+    },
+    "userId": {
+     "description": "An object ID you observed in a tool result, or '$ref:<step id>.output.id' for an object an earlier step creates",
+     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|\\$ref:[A-Za-z0-9_-]+\\.output\\.id)$",
+     "title": "Userid",
+     "type": "string"
+    },
+    "groupName": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Display name, for the approval card only",
+     "title": "Groupname"
+    }
+   },
+   "required": [
+    "groupId",
+    "userId"
+   ],
+   "title": "GroupAddMemberParams",
+   "type": "object"
+  },
+  "console": true
+ },
+ {
+  "name": "tap.create",
+  "risk_class": "security.credential",
+  "verify": "GET /users/{userId}/authentication/methods: a temporaryAccessPass method exists",
+  "compensate": "DELETE /users/{userId}/authentication/temporaryAccessPassMethods/{id}",
+  "params": {
+   "additionalProperties": false,
+   "properties": {
+    "userId": {
+     "description": "An object ID you observed in a tool result, or '$ref:<step id>.output.id' for an object an earlier step creates",
+     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|\\$ref:[A-Za-z0-9_-]+\\.output\\.id)$",
+     "title": "Userid",
+     "type": "string"
+    },
+    "startDateTime": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Startdatetime"
+    },
+    "lifetimeInMinutes": {
+     "default": 480,
+     "description": "The tenant's TAP policy allows 60-480 minutes",
+     "maximum": 480,
+     "minimum": 60,
+     "title": "Lifetimeinminutes",
+     "type": "integer"
+    },
+    "isUsableOnce": {
+     "default": false,
+     "title": "Isusableonce",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "userId"
+   ],
+   "title": "TapCreateParams",
+   "type": "object"
+  },
+  "console": false
+ },
+ {
+  "name": "link.sendOneTime",
+  "risk_class": "none",
+  "verify": "link record exists and is unviewed",
+  "compensate": "expire the link",
+  "params": {
+   "additionalProperties": false,
+   "properties": {
+    "to": {
+     "pattern": "^[^@\\s]+@[^@\\s]+$",
+     "title": "To",
+     "type": "string"
+    },
+    "userId": {
+     "description": "The user the credentials are for",
+     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|\\$ref:[A-Za-z0-9_-]+\\.output\\.id)$",
+     "title": "Userid",
+     "type": "string"
+    },
+    "tap": {
+     "anyOf": [
+      {
+       "description": "'$ref:<tap.create step id>.output.tap'. The TAP value itself is never in a plan",
+       "pattern": "^\\$ref:[A-Za-z0-9_-]+\\.output\\.tap$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Omit to use this user's tap.create step",
+     "title": "Tap"
+    },
+    "includes": {
+     "default": [],
+     "items": {
+      "enum": [
+       "email_access_steps",
+       "outlook_mobile_app_tip",
+       "file_share_note"
+      ],
+      "type": "string"
+     },
+     "title": "Includes",
+     "type": "array"
+    },
+    "note": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Plain text shown with the link. Never put a TAP or password here",
+     "title": "Note"
+    }
+   },
+   "required": [
+    "to",
+    "userId"
+   ],
+   "title": "LinkSendParams",
+   "type": "object"
+  },
+  "console": false
+ },
+ {
+  "name": "followup.schedule",
+  "risk_class": "none",
+  "verify": "followup record exists with runAt",
+  "compensate": "cancel the follow-up",
+  "params": {
+   "additionalProperties": false,
+   "properties": {
+    "kind": {
+     "description": "What runs later",
+     "enum": [
+      "license.assign",
+      "license.review",
+      "mfa.verifyNewMethod"
+     ],
+     "title": "Kind",
+     "type": "string"
+    },
+    "runAt": {
+     "format": "date-time",
+     "title": "Runat",
+     "type": "string"
+    },
+    "userId": {
+     "description": "An object ID you observed in a tool result, or '$ref:<step id>.output.id' for an object an earlier step creates",
+     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|\\$ref:[A-Za-z0-9_-]+\\.output\\.id)$",
+     "title": "Userid",
+     "type": "string"
+    },
+    "skuId": {
+     "anyOf": [
+      {
+       "description": "An object ID you observed in a tool result",
+       "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Skuid"
+    },
+    "skuPartNumber": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Skupartnumber"
+    }
+   },
+   "required": [
+    "kind",
+    "runAt",
+    "userId"
+   ],
+   "title": "FollowupParams",
+   "type": "object"
+  },
+  "console": false
+ },
+ {
+  "name": "sessions.revoke",
+  "risk_class": "access.revoke",
+  "verify": "GET /users/{userId}: signInSessionsValidFromDateTime moved forward",
+  "compensate": "nothing to undo: revoking sessions only ends current tokens; the user can sign in again normally",
+  "params": {
+   "additionalProperties": false,
+   "properties": {
+    "userId": {
+     "description": "An object ID you observed in a tool result, or '$ref:<step id>.output.id' for an object an earlier step creates",
+     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|\\$ref:[A-Za-z0-9_-]+\\.output\\.id)$",
+     "title": "Userid",
+     "type": "string"
+    }
+   },
+   "required": [
+    "userId"
+   ],
+   "title": "SessionsRevokeParams",
+   "type": "object"
+  },
+  "console": true
+ },
+ {
+  "name": "mailbox.autoReply",
+  "risk_class": "write.reversible",
+  "verify": "GET /users/{userId}/mailboxSettings: auto-reply on with the message",
+  "compensate": "PATCH mailboxSettings back to the snapshot (auto-reply off)",
+  "params": {
+   "additionalProperties": false,
+   "properties": {
+    "userId": {
+     "description": "An object ID you observed in a tool result, or '$ref:<step id>.output.id' for an object an earlier step creates",
+     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|\\$ref:[A-Za-z0-9_-]+\\.output\\.id)$",
+     "title": "Userid",
+     "type": "string"
+    },
+    "message": {
+     "description": "The reply sent to external senders; shown internally too unless overridden",
+     "title": "Message",
+     "type": "string"
+    },
+    "internalMessage": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "A different reply for senders inside the org",
+     "title": "Internalmessage"
+    },
+    "scheduledEndDateTime": {
+     "anyOf": [
+      {
+       "format": "date-time",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "When the auto-reply stops; omit to leave it on",
+     "title": "Scheduledenddatetime"
+    }
+   },
+   "required": [
+    "userId",
+    "message"
+   ],
+   "title": "MailboxAutoReplyParams",
+   "type": "object"
+  },
+  "console": true
+ },
+ {
+  "name": "mailbox.forwardRule",
+  "risk_class": "data.access",
+  "verify": "GET messageRules: a rule forwards to forwardTo",
+  "compensate": "DELETE the inbox rule",
+  "params": {
+   "additionalProperties": false,
+   "properties": {
+    "userId": {
+     "description": "An object ID you observed in a tool result, or '$ref:<step id>.output.id' for an object an earlier step creates",
+     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|\\$ref:[A-Za-z0-9_-]+\\.output\\.id)$",
+     "title": "Userid",
+     "type": "string"
+    },
+    "forwardTo": {
+     "description": "An internal recipient; external forwarding is forbidden",
+     "pattern": "^[^@\\s]+@[^@\\s]+$",
+     "title": "Forwardto",
+     "type": "string"
+    },
+    "ruleName": {
+     "default": "Forward (offboarding)",
+     "title": "Rulename",
+     "type": "string"
+    }
+   },
+   "required": [
+    "userId",
+    "forwardTo"
+   ],
+   "title": "MailboxForwardRuleParams",
+   "type": "object"
+  },
+  "console": false
+ },
+ {
+  "name": "group.removeMember",
+  "risk_class": "write.reversible",
+  "verify": "GET /users/{userId}/memberOf: no longer contains groupId",
+  "compensate": "POST /groups/{groupId}/members/$ref to re-add",
+  "params": {
+   "additionalProperties": false,
+   "properties": {
+    "groupId": {
+     "description": "An object ID you observed in a tool result",
+     "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+     "title": "Groupid",
+     "type": "string"
+    },
+    "userId": {
+     "description": "An object ID you observed in a tool result, or '$ref:<step id>.output.id' for an object an earlier step creates",
+     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|\\$ref:[A-Za-z0-9_-]+\\.output\\.id)$",
+     "title": "Userid",
+     "type": "string"
+    },
+    "groupName": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Display name, for the approval card only",
+     "title": "Groupname"
+    }
+   },
+   "required": [
+    "groupId",
+    "userId"
+   ],
+   "title": "GroupRemoveMemberParams",
+   "type": "object"
+  },
+  "console": true
+ },
+ {
+  "name": "group.addOwner",
+  "risk_class": "data.access",
+  "verify": "GET /groups/{groupId}/owners: contains userId",
+  "compensate": "DELETE /groups/{groupId}/owners/{userId}/$ref",
+  "params": {
+   "additionalProperties": false,
+   "properties": {
+    "groupId": {
+     "description": "An object ID you observed in a tool result",
+     "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+     "title": "Groupid",
+     "type": "string"
+    },
+    "userId": {
+     "description": "An object ID you observed in a tool result, or '$ref:<step id>.output.id' for an object an earlier step creates",
+     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|\\$ref:[A-Za-z0-9_-]+\\.output\\.id)$",
+     "title": "Userid",
+     "type": "string"
+    },
+    "groupName": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Display name, for the approval card only",
+     "title": "Groupname"
+    }
+   },
+   "required": [
+    "groupId",
+    "userId"
+   ],
+   "title": "GroupAddOwnerParams",
+   "type": "object"
+  },
+  "console": false
+ },
+ {
+  "name": "authMethod.delete",
+  "risk_class": "security.credential",
+  "verify": "GET /users/{userId}/authentication/methods: the method is gone",
+  "compensate": "nothing to restore: the user registers a new method (with the TAP sent by one-time link)",
+  "params": {
+   "additionalProperties": false,
+   "properties": {
+    "userId": {
+     "description": "An object ID you observed in a tool result, or '$ref:<step id>.output.id' for an object an earlier step creates",
+     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|\\$ref:[A-Za-z0-9_-]+\\.output\\.id)$",
+     "title": "Userid",
+     "type": "string"
+    },
+    "methodType": {
+     "description": "Which kind of method to delete; the handler maps it to the Graph endpoint",
+     "enum": [
+      "authenticator",
+      "phone",
+      "fido2",
+      "softwareOath",
+      "windowsHelloForBusiness"
+     ],
+     "title": "Methodtype",
+     "type": "string"
+    },
+    "methodId": {
+     "description": "The method's id, observed from authMethods.list",
+     "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+     "title": "Methodid",
+     "type": "string"
+    }
+   },
+   "required": [
+    "userId",
+    "methodType",
+    "methodId"
+   ],
+   "title": "AuthMethodDeleteParams",
+   "type": "object"
+  },
+  "console": false
+ },
+ {
+  "name": "file.restoreVersion",
+  "risk_class": "write.reversible",
+  "verify": "GET /drives/{driveId}/items/{itemId}/versions: a new current version with the chosen version's size",
+  "compensate": "restoreVersion to the version that was current before (output.previousVersionId); the overwritten version stays in the history either way",
+  "params": {
+   "additionalProperties": false,
+   "properties": {
+    "driveId": {
+     "description": "A drive_id from files.search",
+     "pattern": "^[A-Za-z0-9!_-]+$",
+     "title": "Driveid",
+     "type": "string"
+    },
+    "itemId": {
+     "description": "An item_id from files.search",
+     "pattern": "^[A-Za-z0-9!_-]+$",
+     "title": "Itemid",
+     "type": "string"
+    },
+    "versionId": {
+     "description": "A version id from files.versions, e.g. '2.0'",
+     "pattern": "^\\d+\\.\\d+$",
+     "title": "Versionid",
+     "type": "string"
+    },
+    "fileName": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "The file's name, for the approval card only",
+     "title": "Filename"
+    }
+   },
+   "required": [
+    "driveId",
+    "itemId",
+    "versionId"
+   ],
+   "title": "FileRestoreVersionParams",
+   "type": "object"
+  },
+  "console": true
+ }
+]

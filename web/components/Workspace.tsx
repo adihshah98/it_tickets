@@ -13,6 +13,7 @@ import { DefinitionOfDone, Followups, Messages, TimeEntry, Links, NeedsTechnicia
 import { Execution } from "./Execution";
 import { InvestigationLog } from "./InvestigationLog";
 import { EscalationDiagnosis, LearnedBadge, NoPlaybookBanner } from "./Learning";
+import { ManualStepPanel } from "./ManualStepPanel";
 import { PlanSteps } from "./PlanSteps";
 import { Understood } from "./Understood";
 import { Section, StateBadge } from "./ui";
@@ -48,6 +49,11 @@ export default function Workspace() {
   const deciding = (state === "AWAITING_APPROVAL" || state === "HELD") && snap.plan && !snap.plan.escalate;
   const executed = Object.values(view.steps).some((r) => !r.followup) || steps.some((s) => s.status !== "pending");
   const handsFree = state === "DONE" && !snap.approval;
+  // "Do it myself": under the diagnosis while escalated; in the execution's place once closed
+  const consolePanel = (
+    <ManualStepPanel snap={{ ...snap, run: { ...snap.run, state } }} onChanged={refresh}
+                     onClosing={() => { reopen(); refresh(); }} />
+  );
 
   return (
     <div className="space-y-4">
@@ -82,6 +88,8 @@ export default function Workspace() {
       {snap.approval && <ApprovalSummary approval={snap.approval} oob={snap.oob} />}
 
       {executed && <Execution steps={steps} runs={view.steps} secs={view.executeSecs} />}
+      {/* a closed console run: its steps read before their close-out */}
+      {state !== "ESCALATED" && snap.technician_steps.length > 0 && consolePanel}
 
       {snap.closeout.checks.length > 0 && <DefinitionOfDone checks={snap.closeout.checks} />}
       {(snap.closeout.messages.length > 0 || snap.closeout.blocked.length > 0) && (
@@ -94,6 +102,8 @@ export default function Workspace() {
       {snap.plan && snap.plan.needs_technician.length > 0 && <NeedsTechnician items={snap.plan.needs_technician} />}
       {snap.outcome && Boolean(snap.outcome.diagnosis) && state === "ESCALATED" && <EscalationDiagnosis outcome={snap.outcome} />}
       {snap.outcome && (state === "ESCALATED" || !deciding) && <Outcome outcome={snap.outcome} planReason={snap.plan?.escalation_reason} />}
+
+      {state === "ESCALATED" && consolePanel}
 
       {view.errors.map((e) => (
         <p key={e.seq} className="rounded bg-red-50 p-2 font-mono text-xs text-red-900">{e.where}: {e.error}</p>

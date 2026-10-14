@@ -12,6 +12,10 @@ export const SENDERS = [
 /** Who can approve: Taylor for onboarding, offboarding and spend; the others show the refusal. */
 export const APPROVERS = ["tgarcia", "kevin", "jlee"] as const;
 
+/** The MSP's technicians, for "Do it myself" and approving playbooks (Build-Day21 decision 7). Not client
+ * staff: the API still adds the tenant's domain to a bare alias, as for everyone. */
+export const TECHNICIANS = ["aditya"] as const;
+
 const ONBOARD =
   "hey team, we have a new hire Priya Nair starting monday in accounting. same setup as Marcus pls, " +
   "she'll need office + teams. thx";

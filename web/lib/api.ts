@@ -1,5 +1,6 @@
 // Typed calls to the backend (backend/tech/api.py). The browser calls it directly; CORS allows this origin.
 
+import type { CatalogueAction, Observed } from "./console";
 import type { LinkView, RunSummary, Snapshot } from "./types";
 
 export const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -47,7 +48,22 @@ export const confirmOob = (id: number, by: string) => call<{ state: string }>(`/
 export const runNow = (followupId: number) =>
   call<{ followup_id: number; run_id: number }>(`/followups/${followupId}/run-now`, {});
 
-export const viewLink = (token: string) => call<LinkView>(`/l/${encodeURIComponent(token)}`);
+// "Do it myself" (Build-Day20): one catalogue action by a technician on an ESCALATED run, then close it.
+
+export const catalogue = () => call<CatalogueAction[]>("/catalogue");
+
+export const observed = (id: number) => call<Observed[]>(`/runs/${id}/observed`);
+
+/** Awaited until the step is verified: a gate block or a failed verify is `ok: false` with the reason. */
+export const manualStep = (id: number, by: string, action: string, params: Record<string, unknown>) =>
+  call<{ ok: boolean; step_id: string; error: string | null; state: string }>(
+    `/runs/${id}/manual-step`, { by, action, params });
+
+/** Starts the close-out in the background (DoD, reply, PSA note); follow it on the event stream. */
+export const closeRun = (id: number, by: string, note: string | null) =>
+  call<{ state: string }>(`/runs/${id}/close`, { by, note });
+
+export const viewLink =(token: string) => call<LinkView>(`/l/${encodeURIComponent(token)}`);
 
 export const revealLink = (token: string) =>
   call<LinkView & { temporaryAccessPass: string }>(`/l/${encodeURIComponent(token)}/reveal`, {});
