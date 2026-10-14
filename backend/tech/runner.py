@@ -11,6 +11,8 @@
     draft_playbook  "Save as playbook" on a finished no-playbook run: the drafter's YAML, not yet saved.
     technician_step "Do it myself" on an ESCALATED run: one catalogue action, grounded, gated (technician
               path) and run by the executor with actor technician:{email}. The run stays ESCALATED.
+    audit_draft  "I fixed it in the admin center" on an ESCALATED run: poll the audit logs for the technician's
+              changes, then draft a playbook from them (capped at A2). The run stays ESCALATED.
     technician_close  closes that run: ESCALATED -> CLOSING -> DONE, with the no-playbook DoD over the
               technician's verified steps and their note in the PSA note (or back to ESCALATED on a failed DoD).
 
@@ -26,7 +28,7 @@ import json
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -43,13 +45,13 @@ from tech.core.config import REPO, Settings, ensure_link_key
 from tech.core.models import GUID_RE, STEP_TYPES, Plan, Triage, parse_ref
 from tech.core.observability import configure_logfire
 from tech.core.store import RunState, Store
-from tech.execution import mocks, scheduler
+from tech.execution import links, mocks, scheduler
 from tech.execution.catalogue import ACTIONS, FOLLOWUP_ACTIONS
 from tech.execution.executor import Execution
 from tech.graph.client import GraphClient, GraphError, graph_from_settings
 from tech.graph.reads import Transcript, fetch
 from tech.graph.writes import SecretLeak, Secrets
-from tech.learning.sources import from_run, proposed_intent
+from tech.learning.sources import from_audit_log, from_run, proposed_intent
 from tech.playbooks import ClientFacts, PlaybookLibrary, load_client_facts
 from tech.safety import gate
 from tech.safety.lint import file_problems
@@ -96,6 +98,8 @@ class Runtime:
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     closeout_model: Any = CLOSEOUT_MODEL
     drafter_model: Any = drafter.MODEL
+    audit_poll_s: float = 30.0   # audit logs take 1-3 minutes to show a change (Build-Day20 spike)
+    audit_wait_s: float = 600.0
     clean_sign_ins_for: str | None = None  # MFA demo only: settings.mfa_demo_clean_user
     learned_dir: Path | None = None  # where approved playbooks' source runs are recorded (None: not recorded)
     library: PlaybookLibrary = field(init=False)
@@ -294,6 +298,44 @@ async def technician_close(rt: Runtime, run_id: int, *, by: str, note: str | Non
     else:
         transition(rt.store, run_id, S.DONE)
     return rt.store.get_run(run_id).state
+
+
+def check_auditable(store: Store, run_id: int) -> datetime:
+    """audit_draft's precondition: an ESCALATED run. Returns when it escalated (the audit window's start)."""
+    state = store.get_run(run_id).state
+    if state != S.ESCALATED:
+        raise RunError(f"run {run_id} is {state}; audit logs are read for an ESCALATED run a technician fixed")
+    escalated = [e for e in store.events_of(run_id, "state") if e.payload["to"] == S.ESCALATED.value][-1]
+    return links.as_utc(escalated.created_at)
+
+
+async def audit_draft(rt: Runtime, run_id: int, *, by: str) -> drafter.Draft | None:
+    """"I fixed it in the admin center" (Build-Day20): poll directoryAudits until the technician's changes show
+    (then one more poll for stragglers) or audit_wait_s passes. Records `audit_observed` (status waiting, then
+    found or timed_out) and, if a change can be learned from, drafts a playbook (`playbook_drafted`). Approve it
+    with source audit_log: the library caps it at A2."""
+    since = check_auditable(rt.store, run_id)
+    by = person(by, rt.domain)
+    rt.store.append_event(run_id, "audit_observed", {"status": "waiting", "since": since.isoformat(), "by": by})
+    polls = int(rt.audit_wait_s // rt.audit_poll_s) + 1 if rt.audit_poll_s else 1
+    findings, seen = None, False
+    for attempt in range(polls):
+        until = datetime.now(UTC)
+        findings = await from_audit_log(rt.store, rt.graph, run_id, since=since, until=until)
+        if findings.found and seen:
+            break
+        seen = findings.found
+        if attempt < polls - 1:
+            await rt.sleep(rt.audit_poll_s)
+    if findings is None or not findings.found:
+        rt.store.append_event(run_id, "audit_observed", {"status": "timed_out", "since": since.isoformat(),
+                                                         "waited_s": rt.audit_wait_s})
+        return None
+    rt.store.append_event(run_id, "audit_observed", {"status": "found", "since": since.isoformat(),
+                                                     "until": until.isoformat()} | findings.payload())
+    if findings.source is None:  # nothing mapped: only changes we can't learn, or ones already undone
+        return None
+    return await drafter.draft(rt.store, findings.source, model=rt.drafter_model)
 
 
 def observed_objects(store: Store, run_id: int) -> list[dict[str, Any]]:

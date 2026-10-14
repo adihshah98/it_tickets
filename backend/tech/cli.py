@@ -8,6 +8,7 @@
     uv run tech followup list 7 | run 3                  # scheduled follow-ups; "run now"
     uv run tech step 21 group.addMember groupId=… userId=… --by aditya   # "Do it myself" on an ESCALATED run
     uv run tech close 21 --by aditya [--note "Taylor confirmed by phone"]  # close it: DoD, reply, PSA note
+    uv run tech audit-draft 21 --by aditya [--autonomy A2]   # "I fixed it in the admin center"
     uv run tech save-playbook 20 --by aditya [--intent file.restore_version] [--autonomy A3] [--yes]
 
 `run` triages, investigates (linter in the loop), gates and, with nothing to approve, executes.
@@ -29,6 +30,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from tech import runner
+from tech.agents.drafter import Draft
 from tech.core.config import Settings
 from tech.core.store import Event, RunState, Store
 from tech.execution import scheduler
@@ -168,6 +170,32 @@ async def save_playbook(rt: runner.Runtime, run_id: int, *, by: str, intent: str
     """Draft a playbook from a run, show it, and approve it on confirmation. 0 saved, 1 not saved."""
     print(f"drafting a playbook from run {run_id}...", flush=True)
     draft = await runner.draft_playbook(rt, run_id, intent=intent)
+    return review_and_save(rt, run_id, draft, by=by, autonomy=autonomy, yes=yes, ask=ask)
+
+
+async def audit_playbook(rt: runner.Runtime, run_id: int, *, by: str, autonomy: str = "A2", yes: bool = False,
+                         ask: Callable[[str], str] = input) -> int:
+    """"I fixed it in the admin center": wait for the audit logs, show what they say, draft, and save on
+    confirmation (A2 at most). 0 saved, 1 not saved."""
+    print(f"reading the audit logs for run {run_id} (changes usually show within 1-3 minutes)...", flush=True)
+    draft = await runner.audit_draft(rt, run_id, by=by)
+    audit = rt.store.last_event(run_id, "audit_observed").payload
+    if audit["status"] == "timed_out":
+        print(f"no change showed in the audit logs within {audit['waited_s']:.0f} s")
+        return 1
+    for step in audit["mapped"]:
+        print(f"   learned: {step['action']} {step['params']}  ({step['rationale']})")
+    for step in audit["undone"]:
+        print(f"   already undone, not learned: {step['action']} {step['params']}")
+    for item in audit["unmapped"]:
+        print(f"   can't learn: {item['activity']} by {item['by']}: {item['reason']}")
+    if draft is None:
+        return 1
+    return review_and_save(rt, run_id, draft, by=by, autonomy=autonomy, yes=yes, ask=ask)
+
+
+def review_and_save(rt: runner.Runtime, run_id: int, draft: Draft, *, by: str, autonomy: str, yes: bool,
+                    ask: Callable[[str], str]) -> int:
     print(f"--- {draft.intent} (from run {run_id}, {draft.source.kind}) ---\n{draft.yaml}", flush=True)
     if draft.problems:
         print("the draft fails its checks:", *(f"  - {p}" for p in draft.problems), sep="\n")
@@ -238,6 +266,11 @@ def main() -> None:
     close_p.add_argument("run_id", type=int)
     close_p.add_argument("--by", required=True, help="the technician")
     close_p.add_argument("--note", help="for the PSA note (and the playbook, if this run is saved as one)")
+    audit_p = sub.add_parser("audit-draft", help="learn from changes you made in the Entra admin center")
+    audit_p.add_argument("run_id", type=int)
+    audit_p.add_argument("--by", required=True, help="who approves the playbook")
+    audit_p.add_argument("--autonomy", choices=["A1", "A2"], default="A2", help="audit-log playbooks are A2 at most")
+    audit_p.add_argument("--yes", action="store_true", help="save without asking")
     save_p = sub.add_parser("save-playbook", help="draft a playbook from a finished no-playbook run, and save it")
     save_p.add_argument("run_id", type=int)
     save_p.add_argument("--by", required=True, help="who approves the playbook")
@@ -278,6 +311,9 @@ def main() -> None:
         case "close":
             code = asyncio.run(continue_run(args.run_id, lambda rt: runner.technician_close(
                 rt, args.run_id, by=args.by, note=args.note)))
+        case "audit-draft":
+            code = asyncio.run(with_runtime(lambda rt: audit_playbook(
+                rt, args.run_id, by=args.by, autonomy=args.autonomy, yes=args.yes)))
         case "save-playbook":
             code = asyncio.run(with_runtime(lambda rt: save_playbook(
                 rt, args.run_id, by=args.by, intent=args.intent, autonomy=args.autonomy, yes=args.yes)))

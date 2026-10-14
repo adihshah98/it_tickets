@@ -318,6 +318,15 @@ async def directory_object(graph: GraphClient, object_id: str) -> dict:
     return out
 
 
+async def directory_audits(graph: GraphClient, since: datetime, target_id: str) -> list[dict]:
+    """Entra directory audit entries since `since` that touch `target_id` (Build-Day20: both filters work
+    app-only). Raw entries can carry secrets such as device tokens, so this isn't a registered read: it is
+    never recorded as a tool_call or shown to a model. learning/audit_map.py maps the entries."""
+    f = (f"activityDateTime ge {since.strftime('%Y-%m-%dT%H:%M:%SZ')} "
+         f"and targetResources/any(t: t/id eq '{odata_str(target_id)}')")
+    return [e async for e in graph.list("/auditLogs/directoryAudits", {"$filter": f})]
+
+
 # Reads run for a person, never offered to the investigator (its tools are listed in agents/investigator.py).
 CONFIRM_READS: dict[str, ReadFn] = {
     "directoryObjects.get": directory_object,

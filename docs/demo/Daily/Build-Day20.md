@@ -19,7 +19,7 @@ Each part ends with green tests and a commit, then a stop for review.
 | 0 | Spike: audit-log lag and filters (needs you in the Entra admin center) | None: **done**, lag ≤ 2.5 min |
 | 1 | Technician steps: transcript from events, confirming read, gate's technician path, executor `actor`, bypass check | New path; agent runs unchanged: **done** |
 | 2 | Technician close-out, wider `can_save_playbook`, learning case **L1** | Escalated runs can close via a technician: **done** |
-| 3 | Audit-log learning: the read, `audit_map`, `from_audit_log`, the polling route, **L2** | New path; first to cut if behind |
+| 3 | Audit-log learning: the read, `audit_map`, `from_audit_log`, the polling route, **L2** | New path: **done** |
 | 4 | Live: one console step on the tenant, and an audit draft from a real admin-center change | None |
 
 **Needs your approval:**
@@ -416,6 +416,82 @@ The results go into this doc and settle decision 9's names and decision 11's tim
   - an undone change → not learned;
   - a timeout → `audit_observed {timed_out}`;
   - **L2**.
+
+**As built:**
+
+- **`learning/audit_map.py`:**
+  - `relevant(entry, since, until, observed)` applies Part 0's filter: a person (`initiatedBy.user`), not
+    a `Read`, in the window, touching an observed object.
+  - `map_entry(entry)` returns an `ObservedStep` (actor `technician:{initiator UPN}`, with a rationale
+    naming the activity and time) or an `Unmapped(activity, at, by, reason, targets)`. The `Unmapped`
+    carries names and IDs only, never raw values.
+  - It maps "Add member to group", "Remove member from group", "Add owner to group", "Update user"
+    (JobTitle, Department, DisplayName, UsageLocation and AccountEnabled; any other field makes the entry
+    unmapped) and "Disable account".
+  - **"Invalidate all refresh tokens" isn't mapped.** Nothing readable confirms it afterwards (decision
+    10), so it's listed as "can't learn".
+- **`reads.directory_audits(graph, since, target_id)`** applies both filters. It is **not** a registered
+  read: raw entries can carry device tokens (Part 0), so they're never recorded as a `tool_call` or shown
+  to a model.
+- **`sources.from_audit_log(store, graph, run_id, since, until)` → `AuditFindings(source, mapped,
+  unmapped, undone)`:**
+  - "observed" means every object the run's reads saw except licence SKUs, queried one ID at a time and
+    merged by entry ID;
+  - each mapped step gets one confirming read through the investigator's own read functions
+    (`users.memberOf`, `users.ownedObjects`, `users.get`). Its result is the step's `verified`, and a
+    change that's gone is `undone`;
+  - `from_run`'s triage, plan, reads and findings handling moved into a shared `_run_context`, so both
+    sources reduce the run the same way.
+- **`runner.audit_draft(rt, run_id, by)`:**
+  - the window starts when the run escalated (its last ESCALATED state event);
+  - it records `audit_observed` (`waiting` → `found` with mapped/unmapped/undone, or `timed_out`), then
+    drafts if anything mapped;
+  - it polls every `Runtime.audit_poll_s` (30) up to `audit_wait_s` (600, per Part 0), with one more poll
+    after the first find for stragglers;
+  - the run stays ESCALATED, because learning a playbook doesn't close the ticket.
+- **The library:** `approve(..., source="audit_log", source_run_id=…)` checks the YAML against the actions
+  in that run's last `audit_observed`, exactly as run sources are checked against their verified steps. The
+  ceiling caps it at A2 until a run on it succeeds.
+- **API and CLI:**
+  - `POST /runs/{id}/audit-draft {by}` returns 202 and runs as a background task (`escalate=False`).
+  - The snapshot gains `audit` (the last `audit_observed`) and `playbook_draft` (the last
+    `playbook_drafted`), for Day 21's waiting state and review.
+  - `tech audit-draft RUN --by NAME [--autonomy A1|A2]` prints what was learned, what was undone and what
+    can't be learned, then saves on confirmation. It shares `review_and_save` with `save-playbook`.
+- **FakeTenant:** `directoryAudits` with both filters, plus `audit_add_member`, `audit_update_user` and
+  `audit_noise` builders shaped exactly like the spike's entries: the MFA service's token-bearing "Update
+  user", a password reset, a passkey read, and the `GroupsODataV4_Get` trap.
+- **Found while testing:**
+  - FakeTenant compared times as strings, and `…17.9Z` sorts before `…17Z`. It now parses them.
+  - Day 19's `test_an_audit_log_draft_is_capped_at_a2` approved an audit_log playbook with no audit
+    evidence. That's now refused, and the test pins the refusal; L2 covers the A2 cap.
+
+**Tests:**
+
+- `test_audit.py` (13):
+  - mapping a group add and a title change;
+  - unmapped with reasons, with no token leaking;
+  - relevance: person, app, the trap, read, window, unobserved, our own app;
+  - a draft from the mapped change, with the password reset listed, no token in any event, and the run
+    still ESCALATED;
+  - an undone change → not learned;
+  - nothing found → `timed_out` after 21 polls;
+  - one straggler poll;
+  - a change from before the escalation doesn't count;
+  - a non-ESCALATED run → refused;
+  - the route (409, 202 → snapshot);
+  - the CLI output.
+- **`test_learning.py` L2:**
+  1. Jordan's ticket escalates.
+  2. An admin-center add, with noise, is drafted as `audit_log` with only `group.addMember` (the reset is
+     listed).
+  3. A3 → refused, and a widened YAML → refused; A2 is approved.
+  4. Luis's ticket → `approve/autonomy.unproven`, approved → DONE.
+  5. Then A3 is allowed.
+
+  Zero bypasses.
+
+**Result:** `uv run pytest`: 497 passed. `ruff` is clean. No live run.
 
 ## Part 4: live (needs approval: tenant writes and model spend)
 

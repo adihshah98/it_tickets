@@ -12,6 +12,7 @@
     POST /runs/{id}/manual-step      "Do it myself": one catalogue action by a technician on an ESCALATED run
     GET  /runs/{id}/observed         the users, groups and files the run's reads saw (the console's ID picker)
     POST /runs/{id}/close            close a run a technician finished in the console; close-out in the background
+    POST /runs/{id}/audit-draft      "I fixed it in the admin center": poll the audit logs, then draft (background)
     POST /runs/{id}/playbook-draft   "Save as playbook": the drafter's YAML from a finished run (not saved)
     POST /playbooks                  a written playbook (prose or YAML) -> a draft (not saved)
     POST /playbooks/{intent}/approve save a draft (as edited) as the intent's next version, at an autonomy level
@@ -214,6 +215,9 @@ def snapshot(store: Store, run_id: int, web_origin: str, domain: str) -> dict[st
         "links": link_rows,
         "closeout": closeout.view(store, run_id, link_rows),
         "technician_steps": _technician_steps(store, run_id),
+        # "I fixed it in the admin center": waiting | found (with mapped/unmapped/undone) | timed_out
+        "audit": audit.payload if (audit := store.last_event(run_id, "audit_observed")) else None,
+        "playbook_draft": draft.payload if (draft := store.last_event(run_id, "playbook_drafted")) else None,
         "can_save_playbook": runner.can_save_playbook(store, run_id),
     }
 
@@ -256,6 +260,10 @@ class ManualStepIn(BaseModel):
 class CloseIn(BaseModel):
     by: str = Field(min_length=1)
     note: str | None = None
+
+
+class AuditDraftIn(BaseModel):
+    by: str = Field(min_length=1)
 
 
 class DraftIn(BaseModel):
@@ -411,6 +419,15 @@ def create_app(runtime: runner.Runtime | None = None, *, web_origin: str = DEFAU
             raise runner.RunError(f"run {run_id} has work running; wait for it to finish")
         runner.check_closable(rt.store, run_id)
         tasks.spawn(run_id, runner.technician_close(rt, run_id, by=body.by, note=body.note), what="close")
+        return {"state": rt.store.get_run(run_id).state.value}
+
+    @app.post("/runs/{run_id}/audit-draft", status_code=202)
+    async def audit_draft(run_id: int, body: AuditDraftIn) -> dict[str, str]:
+        """Polls for up to Runtime.audit_wait_s; the snapshot's `audit` shows progress, `playbook_draft` the result."""
+        if tasks.busy(run_id):
+            raise runner.RunError(f"run {run_id} has work running; wait for it to finish")
+        runner.check_auditable(rt.store, run_id)
+        tasks.spawn(run_id, runner.audit_draft(rt, run_id, by=body.by), what="audit-draft", escalate=False)
         return {"state": rt.store.get_run(run_id).state.value}
 
     @app.get("/runs/{run_id}/observed")

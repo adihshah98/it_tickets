@@ -158,9 +158,10 @@ async def test_a_written_playbook_is_a2_until_a_run_on_it_succeeds(rt, restore_g
     assert rt.library.autonomy()[INTENT] == "A3"
 
 
-async def test_an_audit_log_draft_is_capped_at_a2(rt):
-    with pytest.raises(PlaybookRejected, match="A3 needs"):
-        rt.library.approve(INTENT, LEARNED_RESTORE.read_text(), autonomy="A3", by="aditya", source="audit_log")
+async def test_an_audit_log_playbook_needs_the_audit_logs_behind_it(rt):
+    """Its A2 cap and the check against the audit-logged actions are in test_learning.py (L2)."""
+    with pytest.raises(PlaybookRejected, match="audit logs showed a change"):
+        rt.library.approve(INTENT, LEARNED_RESTORE.read_text(), autonomy="A2", by="aditya", source="audit_log")
 
 
 async def test_approving_again_makes_v2_and_retires_v1(rt, restore_gated):

@@ -58,6 +58,7 @@ class FakeTenant:
         self.files: dict[str, dict] = {}            # itemId -> {id, name, drive, versions (newest first)}
         self.contents: dict[tuple[str, str], bytes] = {}  # (itemId, versionId) -> that version's bytes
         self.search_lag = 0  # searches that find nothing yet (the index trails a fresh upload)
+        self.audits: list[dict] = []  # directoryAudits entries, shaped as the Day 20 spike recorded them
         self.seat_holder = self.add_user("seat-holder", "Seat Holder")
 
     # ------------------------------------------------------------ setup helpers
@@ -206,6 +207,17 @@ class FakeTenant:
             return httpx.Response(200, json={"value": [
                 {"skuId": s["skuId"], "skuPartNumber": s["skuPartNumber"], "prepaidUnits": {"enabled": s["enabled"]},
                  "consumedUnits": consumed.count(key)} for key, s in self.skus.items()]})
+        if method == "GET" and path == "/auditLogs/directoryAudits":
+            since = re.search(r"activityDateTime ge (\S+)", query)
+            target = re.search(r"t/id eq '([^']+)'", query)
+            def at(text: str) -> datetime:  # compare times, not strings: "…17.9Z" sorts before "…17Z"
+                return datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+            rows = [e for e in self.audits
+                    if (not since or at(e["activityDateTime"]) >= at(since.group(1)))
+                    and (not target or any(t.get("id", "").lower() == target.group(1).lower()
+                                           for t in e.get("targetResources", [])))]
+            return httpx.Response(200, json={"value": rows})
         if method == "GET" and path == "/auditLogs/signIns":
             m = re.search(r"userId eq '([^']+)'", query)
             rows = [r for r in self.sign_ins if not m or r.get("userId", m.group(1)).lower() == m.group(1).lower()]
@@ -333,3 +345,67 @@ class FakeTenant:
                 self.rules.setdefault(uid, []).append(rule)
                 return httpx.Response(201, json=rule)
         return error(404, f"no route {method} {path}", "NotFound")
+
+
+# ------------------------------------------------------------------ directoryAudits entries, as Graph returns them
+# (shapes from the Build-Day20 spike: an admin-center group add and job-title change, and the noise around them)
+
+ADMIN = {"id": "e87b7115-3300-4fb2-9677-41cedc7a4d7b", "upn": "AdityaShah@NorthwindParking.onmicrosoft.com"}
+
+
+def _by_user(upn: str = ADMIN["upn"], uid: str = ADMIN["id"]) -> dict:
+    return {"app": None, "user": {"id": uid, "displayName": None, "userPrincipalName": upn,
+                                  "ipAddress": "50.145.58.66", "userType": None, "agentType": "notAgentic"}}
+
+
+def _by_app(name: str, sp: str | None = None) -> dict:
+    return {"user": None, "app": {"appId": None, "displayName": name, "servicePrincipalId": sp,
+                                  "servicePrincipalName": None}}
+
+
+def _entry(activity: str, at: str, category: str, operation: str, initiated: dict, targets: list[dict]) -> dict:
+    return {"id": f"Directory_{uuid.uuid4()}", "activityDateTime": at, "activityDisplayName": activity,
+            "category": category, "operationType": operation, "result": "success", "initiatedBy": initiated,
+            "targetResources": targets}
+
+
+def audit_add_member(at: str, user_id: str, upn: str, group_id: str, group_name: str, *,
+                     initiated: dict | None = None) -> dict:
+    return _entry("Add member to group", at, "GroupManagement", "Assign", initiated or _by_user(), [
+        {"id": user_id, "displayName": None, "type": "User", "userPrincipalName": upn, "groupType": None,
+         "modifiedProperties": [
+             {"displayName": "Group.ObjectID", "oldValue": None, "newValue": json.dumps(group_id)},
+             {"displayName": "Group.DisplayName", "oldValue": None, "newValue": json.dumps(group_name)}]},
+        {"id": group_id, "displayName": None, "type": "Group", "userPrincipalName": None,
+         "groupType": "unknownFutureValue", "modifiedProperties": []}])
+
+
+def audit_update_user(at: str, user_id: str, upn: str, changes: dict[str, tuple], *,
+                      initiated: dict | None = None) -> dict:
+    """`changes`: {"JobTitle": (old, new)}, as the admin center records them (PascalCase, JSON arrays)."""
+    props = [{"displayName": k, "oldValue": json.dumps([old]), "newValue": json.dumps([new])}
+             for k, (old, new) in changes.items()]
+    props += [{"displayName": "Included Updated Properties", "oldValue": None,
+               "newValue": json.dumps(", ".join(changes))},
+              {"displayName": "TargetId.UserType", "oldValue": None, "newValue": json.dumps("Member")}]
+    return _entry("Update user", at, "UserManagement", "Update", initiated or _by_user(), [
+        {"id": user_id, "displayName": None, "type": "User", "userPrincipalName": upn, "groupType": None,
+         "modifiedProperties": props}])
+
+
+def audit_noise(at: str, user_id: str, upn: str) -> list[dict]:
+    """What came with the spike's two changes: the MFA service's 'Update user' on the signed-in account (with a
+    device token in it), a reset password (not in the catalogue), the admin's own reads, and the trap entry
+    whose `app` is the admin."""
+    return [
+        _entry("Update user", at, "UserManagement", "Update", _by_app("Azure MFA StrongAuthenticationService"), [
+            {"id": user_id, "type": "User", "userPrincipalName": upn, "modifiedProperties": [
+                {"displayName": "StrongAuthenticationPhoneAppDetail", "oldValue": "[]",
+                 "newValue": json.dumps([{"DeviceToken": "apns2-30c5f34ebaa8293c2ee2dc3ad04e8737"}])}]}]),
+        _entry("Reset user password", at, "UserManagement", "Update", _by_user(), [
+            {"id": user_id, "type": "User", "userPrincipalName": upn, "modifiedProperties": []}]),
+        _entry("Get passkey creation options", at, "UserManagement", "Read", _by_user(), [
+            {"id": user_id, "type": "User", "userPrincipalName": upn, "modifiedProperties": []}]),
+        _entry("GroupsODataV4_Get", at, "GroupManagement", "Update", _by_app(ADMIN["upn"], ADMIN["id"]), [
+            {"id": user_id, "type": "User", "modifiedProperties": []}]),
+    ]

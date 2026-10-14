@@ -159,6 +159,11 @@ class PlaybookLibrary:
                 observed = playbook_check.observed_actions(self.store, source_run_id)
             if observed is None:
                 problems.append(f"a {source} playbook needs a source run that reached DONE and changed something")
+        elif source == "audit_log":
+            if source_run_id is not None:
+                observed = self.audit_actions(source_run_id)
+            if not observed:
+                problems.append("an audit_log playbook needs a source run whose audit logs showed a change to learn")
         problems += playbook_check.check(text, intent, observed=observed)
         ceiling = None if problems else self.ceiling(intent, source=source, source_run_id=source_run_id)
         if autonomy == "A3" and ceiling == "A2":
@@ -173,6 +178,11 @@ class PlaybookLibrary:
                 "intent": intent, "version": row.version, "source": source, "autonomy": autonomy, "by": by})
             self._record_learned(row, source_run_id)
         return row
+
+    def audit_actions(self, run_id: int) -> set[str] | None:
+        """The actions the run's audit logs showed (its last `audit_observed` with changes), or None."""
+        found = [e.payload for e in self.store.events_of(run_id, "audit_observed") if e.payload.get("mapped")]
+        return {s["action"] for s in found[-1]["mapped"]} if found else None
 
     def add_version(self, intent: str, text: str, *, source: str, source_run_id: int | None = None,
                     approved_by: str | None = None) -> PlaybookVersion:
