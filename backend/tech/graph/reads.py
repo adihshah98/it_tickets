@@ -245,16 +245,24 @@ async def message_rules(graph: GraphClient, user_id: str) -> list[dict]:
     return rules
 
 
+# Drive searches in flight at once. Live (Build-Day21 part 7): with six team sites searched together, three
+# calls stalled ~36 s each (37 s in all, over the 60 s no-playbook bound with the rest of an investigation);
+# three at a time stalled too; two at a time took 4 s. Graph returns no throttling status, it just waits.
+SEARCH_CONCURRENCY = 2
+
+
 async def files_search(graph: GraphClient, query: str) -> list[dict]:
     """Search the document libraries of every Microsoft 365 group (team sites) for files. Where a library's
     search finds nothing, its top-level files whose names hold every word of the query are returned instead."""
     groups = [g async for g in graph.list("/groups", {"$filter": "groupTypes/any(c:c eq 'Unified')",
                                                       "$select": "id,displayName"})]
+    searching = asyncio.Semaphore(SEARCH_CONCURRENCY)
 
     async def search(group: dict) -> list[dict]:
         try:
             drive = await graph.get(f"/groups/{group['id']}/drive", params={"$select": "id"})
-            page = await graph.get(f"/drives/{drive['id']}/root/search(q='{odata_str(query)}')")
+            async with searching:
+                page = await graph.get(f"/drives/{drive['id']}/root/search(q='{odata_str(query)}')")
             items = page.get("value", [])
             if not items:  # the search index can trail a fresh upload by minutes; the library's top folder can't
                 words = query.casefold().split()

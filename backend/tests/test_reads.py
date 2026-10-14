@@ -1,3 +1,5 @@
+import asyncio
+
 import httpx
 import pytest
 import respx
@@ -167,6 +169,30 @@ async def test_files_search_falls_back_to_the_top_folder_while_the_index_lags(gr
         {"id": "i3", "name": "Q2 Parking Rates.xlsx", "lastModifiedDateTime": "t", "file": {}}))
     hits = await run_read(graph, transcript, "files.search", query="q3 parking rates")
     assert [h["item_id"] for h in hits] == ["i1"]
+
+
+@respx.mock
+async def test_files_search_runs_at_most_two_drive_searches_at_once(graph, transcript):
+    """Live (Build-Day21 part 7): six concurrent root/search calls took 37 s (three stalled ~36 s each); two at a
+    time took 4 s."""
+    groups = [{"id": f"g{i}", "displayName": f"Site {i}"} for i in range(6)]
+    respx.get(f"{GRAPH}/groups").mock(return_value=page(*groups))
+    for i in range(6):
+        respx.get(f"{GRAPH}/groups/g{i}/drive").mock(return_value=httpx.Response(200, json={"id": f"d{i}"}))
+        respx.get(f"{GRAPH}/drives/d{i}/root/children").mock(return_value=page())
+    running, peak = 0, 0
+
+    async def search(request):
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.01)
+        running -= 1
+        return page({"id": "i", "name": "rates.xlsx", "lastModifiedDateTime": "t"})
+
+    respx.get(url__regex=rf"{GRAPH}/drives/d\d/root/search.*").mock(side_effect=search)
+    hits = await run_read(graph, transcript, "files.search", query="rates")
+    assert len(hits) == 6 and peak == 2
 
 
 async def test_the_transcript_grounds_files_by_search_and_versions(transcript):
