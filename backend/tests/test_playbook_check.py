@@ -100,3 +100,13 @@ def test_shipped_playbooks_pass_everything_but_the_newer_never_defaults():
         problems = playbook_check.check(text, intent)
         assert all(p.startswith("never must include") for p in problems), (intent, problems)
         assert len(problems) == {"mfa.reset": 2, "user.offboard": 4, "user.onboard": 4}[intent], (intent, problems)
+
+
+def test_a_new_user_probe_needs_user_create():
+    """user_exists / user_has_sku only check a user the run creates (Build-Day20 live: user_property and
+    user_in_groups had the same trap and were generalized instead)."""
+    text = edited(definition_of_done=[{"version_restored": {}}, {"user_exists": {}}, {"message_sent": {}}])
+    problems = playbook_check.check(text, INTENT, observed=RESTORE)
+    assert any("'user_exists', which only checks a user the run creates" in p for p in problems)
+    onboarding = (HERE / "user.onboard.yaml").read_text().replace("{domain}", DOMAIN)
+    assert not [p for p in playbook_check.check(onboarding, "user.onboard") if "only checks a user" in p]

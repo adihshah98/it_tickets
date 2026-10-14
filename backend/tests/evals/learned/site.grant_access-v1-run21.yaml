@@ -1,0 +1,48 @@
+intent: site.grant_access
+version: 1
+source: technician_run
+run_id: 21
+ticket: Please give Jordan Lee access to the Northwind Operations site.
+from: tgarcia@NorthwindParking.onmicrosoft.com
+triage:
+  intents:
+  - unknown
+  entities:
+    new_user: null
+    peer_user_hint: null
+    subject_user_hint: Jordan Lee
+    apps:
+    - Northwind Operations site
+  requester:
+    name: tgarcia
+    email: tgarcia@northwindparking.onmicrosoft.com
+  out_of_scope_asks: []
+  missing_info:
+  - Is this a new user onboarding, or does Jordan Lee already have an account and
+    just needs permission granted to this specific site?
+  - What level of access does Jordan Lee need (e.g., viewer, editor, admin)?
+reads:
+- - users.search
+  - name: Jordan
+- - users.search
+  - name: Lee
+- - files.search
+  - query: Northwind Operations
+- - users.memberOf
+  - user_id: 37a5cc66-347e-4665-a51c-b2a9e6070222
+- - users.list
+  - {}
+- - users.get
+  - user_id: 37a5cc66-347e-4665-a51c-b2a9e6070222
+- - users.memberOf
+  - user_id: c9bebe97-6c1b-4bfb-933c-fe84a8ae465e
+- - users.memberOf
+  - user_id: 12c50eb5-9ea7-4136-800b-e406f3992320
+- - users.memberOf
+  - user_id: 302a08b1-1ea8-45ac-8e56-95c5752af435
+- - users.licenseDetails
+  - user_id: 37a5cc66-347e-4665-a51c-b2a9e6070222
+plan: null
+gate:
+  t1: approve/technician.self
+state: DONE

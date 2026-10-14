@@ -72,6 +72,19 @@ async def test_user_in_groups_checks_each_step_s_user_when_none_was_created(rt, 
     assert not (await dod.check(ctx(rt, run_id, nothing), playbook(), only=("user_in_groups",)))[0].ok
 
 
+async def test_user_property_checks_each_update_s_fields_when_no_user_was_created(rt, gated, tenant):
+    """A learned job-title playbook (Build-Day20 live): no user.create, so each user.update step's own user
+    must show the fields that step set."""
+    plan = Plan.model_validate({"intent": "user.update_title", "summary": "retitle Marcus", "steps": [
+        step("title", "user.update", {"userId": MARCUS, "jobTitle": "Lead"}, "write.reversible")]})
+    run_id = gated()
+
+    assert not (await dod.check(ctx(rt, run_id, plan), playbook(), only=("user_property",)))[0].ok
+    tenant.users[MARCUS]["jobTitle"] = "Lead"
+    probe = (await dod.check(ctx(rt, run_id, plan), playbook(), only=("user_property",)))[0]
+    assert probe.ok and probe.detail == "jobTitle=Lead"
+
+
 async def test_a_missing_group_still_fails_after_the_rereads(rt, executed, tenant, sleeps):
     run_id, plan = await executed()
     tenant.members[FINANCE_FILES].discard(priya(tenant))

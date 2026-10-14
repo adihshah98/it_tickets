@@ -144,15 +144,29 @@ async def user_exists(ctx: DodContext, args: dict[str, Any]) -> Probe:
 
 @probe("user_property")
 async def user_property(ctx: DodContext, args: dict[str, Any]) -> Probe:
-    if (user := ctx.new_user()) is None:
-        return Probe("user_property", False, NO_USER)
-    want = {k: getattr(ctx.facts, v.removeprefix("$client."), None)
-            if isinstance(v, str) and v.startswith("$client.") else v for k, v in args.items()}
-    found = await get_or_none(ctx.graph, f"/users/{user['id']}", params={"$select": ",".join(["id", *want])})
-    if found is None:
-        return Probe("user_property", False, f"{user['userPrincipalName']} is not in the directory")
-    wrong = [f"{k} is {found.get(k)!r}, expected {v!r}" for k, v in want.items() if not same(v, found.get(k))]
-    return Probe("user_property", not wrong, "; ".join(wrong) or ", ".join(f"{k}={v}" for k, v in want.items()))
+    """Onboarding: the new user has the args' properties (`$client.<field>` from the client facts). With no
+    user.create (a learned user.update playbook, Build-Day20 live): each user.update step's own user has the
+    fields that step set; the args' `$` expressions document intent and aren't evaluated."""
+    if (user := ctx.new_user()) is not None:
+        want = {k: getattr(ctx.facts, v.removeprefix("$client."), None)
+                if isinstance(v, str) and v.startswith("$client.") else v for k, v in args.items()}
+        targets = {user["id"]: (want, user["userPrincipalName"])}
+    else:
+        targets = {}
+        for s in ctx.plan.steps:
+            if s.action == "user.update" and parse_ref(s.params.userId) is None:
+                fields = s.params.model_dump(mode="json", by_alias=True, exclude={"userId"}, exclude_none=True)
+                targets.setdefault(s.params.userId, ({}, s.params.userId))[0].update(fields)
+        if not targets:
+            return Probe("user_property", False, NO_USER)
+    wrong, checked = [], []
+    for uid, (want, label) in targets.items():
+        found = await get_or_none(ctx.graph, f"/users/{uid}", params={"$select": ",".join(["id", *want])})
+        if found is None:
+            return Probe("user_property", False, f"{label} is not in the directory")
+        wrong += [f"{k} is {found.get(k)!r}, expected {v!r}" for k, v in want.items() if not same(v, found.get(k))]
+        checked += [f"{k}={v}" for k, v in want.items()]
+    return Probe("user_property", not wrong, "; ".join(wrong) or ", ".join(checked))
 
 
 @probe("user_has_sku")
@@ -393,6 +407,8 @@ async def version_restored(ctx: DodContext, args: dict[str, Any]) -> Probe:
 # What a no-playbook run's DoD checks besides the reply (closeout.no_playbook_dod): a probe for each allowed
 # action that has one. The others rely on their step's verify read alone.
 NO_PLAYBOOK_PROBES = {"file.restoreVersion": "version_restored"}
+# Probes that only check a user this run created: a playbook without user.create can't use them (playbook_check).
+NEW_USER_PROBES = frozenset({"user_exists", "user_has_sku"})
 
 
 async def check(ctx: DodContext, playbook: Playbook, *, only: Collection[str] | None = None,

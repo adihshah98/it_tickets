@@ -7,7 +7,8 @@ rejects the playbook.
   - the YAML parses into a Playbook, declares the intent it is saved under, and round-trips;
   - every allowed action is in the write catalogue, every must_investigate tool is a read tool, and
     every definition_of_done name is a probe;
-  - every required DoD item has an allowed action that could produce it (the linter's rule 4);
+  - every required DoD item has an allowed action that could produce it (the linter's rule 4), and a probe
+    that only checks a newly created user (dod.NEW_USER_PROBES) needs user.create among the actions;
   - `never` has policy.required_never() for the risk classes the playbook allows;
   - with observed steps (a run it was learned from), every allowed action was observed in that run;
   - with declared actions (a written playbook's draft), every allowed action is one the technician named.
@@ -24,7 +25,7 @@ from pydantic import ValidationError
 
 from tech.core.store import RunState, Store
 from tech.execution.catalogue import ACTIONS
-from tech.execution.dod import PROBES
+from tech.execution.dod import NEW_USER_PROBES, PROBES
 from tech.graph.reads import READS
 from tech.playbooks.loader import Playbook, parse_playbook
 from tech.safety.lint import dod_unmet
@@ -57,6 +58,10 @@ def check(text: str, intent: str, *, observed: Collection[str] | None = None,
     known = {a for a in playbook.allowed_actions if a in ACTIONS}
     problems += [f"Nothing in allowed_actions could meet the definition of done {name!r}."
                  for name in dod_unmet(playbook.definition_of_done, known)]
+    if "user.create" not in known:
+        problems += [f"definition_of_done has {name!r}, which only checks a user the run creates, and this playbook "
+                     "creates none; leave it out (each step's verify already reads its change back)."
+                     for item in playbook.definition_of_done if (name := next(iter(item))) in NEW_USER_PROBES]
 
     have = {line.strip() for line in playbook.never}
     problems += [f"never must include: {line!r}" for line in required_never({ACTIONS[a].risk_class for a in known})
