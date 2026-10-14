@@ -306,6 +306,34 @@ Each needs a decision before Part 1. Each has a recommendation.
   `can_save_playbook` (already served, but not typed).
 - **Tests:** display only. `npm run typecheck`, `lint` and `build` stay green.
 
+**As built:**
+
+- **One `components/Learning.tsx`** holds `NoPlaybookBanner`, `EscalationDiagnosis` and `LearnedBadge`, the
+  way `Closeout.tsx` holds several.
+- **The banner** goes under the header while `no_playbook` and the run isn't DONE.
+- **The badge** goes in the header for each non-shipped `playbooks_used` entry. It reads "Learned playbook
+  · {intent} vN · from run #N", linking to `/playbooks/{intent}` (Part 5) and to the source run. It adds "·
+  no approvals" when the run is DONE with no `approval`.
+- **The diagnosis** goes above `Outcome` on an ESCALATED run whose outcome has a `diagnosis`. `Outcome`
+  filters `DIAGNOSIS_KEYS` out of its key/value dump.
+- **Changed from decision 2: the `missing_action` label.** It reads "The change it couldn't propose:",
+  not "Not in the catalogue:". On run 22 the investigator put `group.addMember` there: the playbook's
+  gotcha stopped it proposing the add, but the action *is* in the catalogue. That matches the field's own
+  description.
+- **`lib/types.ts`:** `Snapshot` gains `technician_steps`, `audit`, `playbook_draft`, `can_save_playbook`,
+  `no_playbook` and `playbooks_used`, with `TechnicianStep`, `AuditObserved` (a union on `status`),
+  `ObservedStep`, `UnmappedAudit`, `PlaybookDraft` and `PlaybookSource`.
+
+**Checked against `data/tech.db`** (the API and `next dev` locally; reads only, no tenant calls):
+
+- **Run 23** has the badge "Learned playbook · site.grant_access v1 · from run #21 · no approvals".
+- **Run 22**, escalated by the learned playbook's gotcha, has the badge without "no approvals", and the
+  diagnosis with its evidence, checks, next step and missing change.
+- **Run 24**, with no playbook and rejected, has the banner. It has no diagnosis, because a rejection
+  carries none.
+
+**Result:** `npm test` (14), `typecheck`, `lint` and `build` are green. No backend change.
+
 ## Part 3: "Do it myself" and Close
 
 - `lib/console.ts` (pure): schema → fields, ID-field kinds, observed → options, form → params.

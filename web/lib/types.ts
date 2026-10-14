@@ -83,6 +83,66 @@ export interface Snapshot {
   followups: { id: number; step_id: string; kind: string; run_at: string; status: string }[];
   links: { id: number; step_id: string; to: string; expires_at: string; viewed_at: string | null; url: string | null }[];
   closeout: { checks: DoneCheck[]; messages: OutboundMessage[]; blocked: BlockedMessage[]; time_entry: TimeEntry | null };
+  /** "Do it myself" steps (Build-Day20), not in the agent's plan. */
+  technician_steps: TechnicianStep[];
+  /** "I fixed it in the admin center": the last audit_observed. */
+  audit: AuditObserved | null;
+  /** The last playbook drafted from this run, for the review screen. */
+  playbook_draft: PlaybookDraft | null;
+  can_save_playbook: boolean;
+  /** No playbook covered this ticket (null before triage). */
+  no_playbook: boolean | null;
+  /** The playbook versions the run followed; source is null for a version deleted since (a reset). */
+  playbooks_used: PlaybookUsed[];
+}
+
+export type PlaybookSource = "shipped" | "agent_run" | "technician_run" | "written" | "audit_log";
+
+export interface PlaybookUsed {
+  intent: string;
+  version: number;
+  source: PlaybookSource | null;
+  source_run_id: number | null;
+}
+
+export interface TechnicianStep {
+  step_id: string;
+  action: string;
+  /** technician:{email} */
+  actor: string;
+  decision: Decision;
+  rule_id: string;
+  reason: string;
+  params: Record<string, unknown> | null;
+  status: "blocked" | StepStatus;
+  output?: Record<string, unknown> | null;
+  observed?: Record<string, unknown> | null;
+  error?: string;
+}
+
+/** A step a run (or the audit logs) showed: backend ObservedStep. */
+export interface ObservedStep {
+  action: string;
+  params: Record<string, unknown>;
+  rationale: string | null;
+  verified: Record<string, unknown>;
+  skipped: string | null;
+  actor: string;
+}
+
+export interface UnmappedAudit { activity: string; at: string; by: string; reason: string; targets: string[] }
+
+export type AuditObserved =
+  | { status: "waiting"; since: string; by: string }
+  | { status: "found"; since: string; until: string; mapped: ObservedStep[]; unmapped: UnmappedAudit[]; undone: ObservedStep[] }
+  | { status: "timed_out"; since: string; waited_s: number };
+
+export interface PlaybookDraft {
+  intent: string;
+  source: PlaybookSource;
+  yaml: string;
+  problems: string[];
+  ok: boolean;
 }
 
 export interface RunSummary {

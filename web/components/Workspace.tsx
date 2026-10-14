@@ -12,6 +12,7 @@ import { ApprovalCard, ApprovalSummary } from "./ApprovalCard";
 import { DefinitionOfDone, Followups, Messages, TimeEntry, Links, NeedsTechnician, Outcome } from "./Closeout";
 import { Execution } from "./Execution";
 import { InvestigationLog } from "./InvestigationLog";
+import { EscalationDiagnosis, LearnedBadge, NoPlaybookBanner } from "./Learning";
 import { PlanSteps } from "./PlanSteps";
 import { Understood } from "./Understood";
 import { Section, StateBadge } from "./ui";
@@ -46,6 +47,7 @@ export default function Workspace() {
   const steps = snap.steps ?? [];
   const deciding = (state === "AWAITING_APPROVAL" || state === "HELD") && snap.plan && !snap.plan.escalate;
   const executed = Object.values(view.steps).some((r) => !r.followup) || steps.some((s) => s.status !== "pending");
+  const handsFree = state === "DONE" && !snap.approval;
 
   return (
     <div className="space-y-4">
@@ -53,6 +55,7 @@ export default function Workspace() {
         <h1 className="text-lg font-semibold">Run #{snap.run.id}</h1>
         <StateBadge state={state} />
         <span className="text-sm text-neutral-600">from {senderName(snap.ticket.from)}</span>
+        {snap.playbooks_used.map((u) => <LearnedBadge key={u.intent} used={u} handsFree={handsFree} />)}
         <span className="ml-auto flex items-center gap-3 text-xs text-neutral-500">
           {view.investigateSecs !== null && <span>investigate {view.investigateSecs.toFixed(0)} s</span>}
           {view.executeSecs !== null && <span>execute {view.executeSecs.toFixed(0)} s</span>}
@@ -61,6 +64,7 @@ export default function Workspace() {
         </span>
       </header>
       {error && <p className="text-sm text-red-700">{error}</p>}
+      {snap.no_playbook && state !== "DONE" && <NoPlaybookBanner />}
 
       <Section title="Ticket">
         <p className="whitespace-pre-wrap text-sm">{snap.ticket.text}</p>
@@ -88,6 +92,7 @@ export default function Workspace() {
       {snap.followups.length > 0 && <Followups snap={snap} runs={view.steps} onStarted={reopen} />}
       {snap.links.length > 0 && <Links links={snap.links} />}
       {snap.plan && snap.plan.needs_technician.length > 0 && <NeedsTechnician items={snap.plan.needs_technician} />}
+      {snap.outcome && Boolean(snap.outcome.diagnosis) && state === "ESCALATED" && <EscalationDiagnosis outcome={snap.outcome} />}
       {snap.outcome && (state === "ESCALATED" || !deciding) && <Outcome outcome={snap.outcome} planReason={snap.plan?.escalation_reason} />}
 
       {view.errors.map((e) => (

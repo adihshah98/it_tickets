@@ -7,6 +7,7 @@ import { useState } from "react";
 import { ApiError, runNow } from "@/lib/api";
 import type { StepRun } from "@/lib/run";
 import type { BlockedMessage, DoneCheck, OutboundMessage, Plan, Snapshot, TimeEntry as TimeEntryT } from "@/lib/types";
+import { DIAGNOSIS_KEYS } from "./Learning";
 import { KeyValues, Section, when } from "./ui";
 
 export function Followups({ snap, runs, onStarted }: {
@@ -95,8 +96,10 @@ const strings = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []
 
 /** The hand-off package (Tech.MD §9): why, what the agent found, what's done, what failed, what can be undone. */
 export function Outcome({ outcome, planReason }: { outcome: NonNullable<Snapshot["outcome"]>; planReason?: string | null }) {
-  const { from, to, kind, reason, findings, done, failed_step, failed_probes, rollback, ...rest } = outcome;
+  const { from, to, kind, reason, findings, done, failed_step, failed_probes, rollback, ...others } = outcome;
   void from;
+  // the diagnosis has its own panel (EscalationDiagnosis)
+  const rest = Object.fromEntries(Object.entries(others).filter(([k]) => !(DIAGNOSIS_KEYS as readonly string[]).includes(k)));
   const evidence = strings(findings);
   const finished = strings(done);
   const probes = strings(failed_probes);
