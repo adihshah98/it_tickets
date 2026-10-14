@@ -1,14 +1,22 @@
 // Typed calls to the backend (backend/tech/api.py). The browser calls it directly; CORS allows this origin.
 
 import type { CatalogueAction, Observed } from "./console";
-import type { LinkView, PlaybookSource, RunSummary, Snapshot } from "./types";
+import type { Level } from "./playbooks";
+import type { LinkView, PlaybookSource, PlaybookSummary, PlaybookView, RunSummary, Snapshot } from "./types";
 
 export const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 export class ApiError extends Error {
-  constructor(readonly status: number, readonly detail: string) {
+  /** `problems`: a 422's list (a playbook that fails its checks), one per item. */
+  constructor(readonly status: number, readonly detail: string, readonly problems: string[] = []) {
     super(detail);
   }
+}
+
+/** A list `detail`: the playbook checks' problems (strings), or FastAPI's validation errors (objects with `msg`). */
+function problemsOf(detail: unknown): string[] {
+  if (!Array.isArray(detail)) return [];
+  return detail.map((d) => (typeof d === "string" ? d : typeof d?.msg === "string" ? d.msg : JSON.stringify(d)));
 }
 
 async function call<T>(path: string, body?: unknown): Promise<T> {
@@ -27,7 +35,10 @@ async function call<T>(path: string, body?: unknown): Promise<T> {
   const data = await res.json().catch(() => null);
   if (!res.ok) {
     const detail = data?.detail;
-    throw new ApiError(res.status, typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : res.statusText);
+    const problems = problemsOf(detail);
+    throw new ApiError(res.status,
+                       typeof detail === "string" ? detail : problems.length ? problems.join(" ") : res.statusText,
+                       problems);
   }
   return data as T;
 }
@@ -80,6 +91,26 @@ export const draftPlaybook = (id: number, intent: string | null, notes: string[]
 
 /** "I fixed it in the admin center": polls the audit logs in the background (up to 10 minutes), then drafts. */
 export const auditDraft = (id: number, by: string) => call<{ state: string }>(`/runs/${id}/audit-draft`, { by });
+
+// The playbook library (Build-Day19): review, check, approve, autonomy.
+
+export const getPlaybook = (intent: string) => call<PlaybookView>(`/playbooks/${encodeURIComponent(intent)}`);
+
+export const listPlaybooks = () => call<PlaybookSummary[]>("/playbooks");
+
+/** Approve's checks without saving: the problems, and the highest autonomy it could be approved at. */
+export const checkPlaybook = (intent: string, yaml: string, source: PlaybookSource, sourceRunId: number | null) =>
+  call<{ problems: string[]; ceiling: Level | null }>(`/playbooks/${encodeURIComponent(intent)}/check`,
+                                                       { yaml, source, source_run_id: sourceRunId });
+
+/** Saves the next version; a 422's `problems` say why not. */
+export const approvePlaybook = (intent: string, body: {
+  yaml: string; autonomy: Level; by: string; source: PlaybookSource; source_run_id: number | null;
+}) => call<PlaybookSummary>(`/playbooks/${encodeURIComponent(intent)}/approve`, body);
+
+/** Within the ceiling (a 422 above it). The library's "Demote to A2" is this with A2. */
+export const setAutonomy = (intent: string, level: Level, by: string) =>
+  call<PlaybookSummary>(`/playbooks/${encodeURIComponent(intent)}/autonomy`, { level, by });
 
 export const viewLink = (token: string) => call<LinkView>(`/l/${encodeURIComponent(token)}`);
 

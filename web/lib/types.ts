@@ -137,6 +137,27 @@ export type AuditObserved =
   | { status: "found"; since: string; until: string; mapped: ObservedStep[]; unmapped: UnmappedAudit[]; undone: ObservedStep[] }
   | { status: "timed_out"; since: string; waited_s: number };
 
+/** GET /playbooks: one intent's current version (backend api.playbook_view). */
+export interface PlaybookSummary {
+  intent: string;
+  version: number;
+  source: PlaybookSource;
+  source_run_id: number | null;
+  approved_by: string | null;
+  created_at: string;
+  autonomy: "A1" | "A2" | "A3";
+  ceiling: "A1" | "A2" | "A3";
+}
+
+/** GET /playbooks/{intent}: the current YAML and every version, newest last. */
+export interface PlaybookView extends PlaybookSummary {
+  yaml: string;
+  versions: {
+    version: number; status: "approved" | "retired"; source: PlaybookSource; source_run_id: number | null;
+    approved_by: string | null; created_at: string; yaml: string;
+  }[];
+}
+
 export interface PlaybookDraft {
   intent: string;
   source: PlaybookSource;

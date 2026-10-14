@@ -470,6 +470,53 @@ Each needs a decision before Part 1. Each has a recommendation.
   - an audit snapshot → the learned and unmapped lists;
   - A3 is disabled under an A2 ceiling.
 
+**As built:**
+
+- **The route** follows `runs/[id]`: `app/playbooks/[intent]/page.tsx` renders `PlaybookPage` (a client
+  component reading `useParams`/`useSearchParams`) inside `<Suspense>`, as the Next 16 docs say for
+  runtime params with `cacheComponents`.
+  - **With `?run=N`,** it loads that run's snapshot and reviews its `playbook_draft`.
+  - **Without it,** it shows the approved playbook (`PlaybookVersions`), or "No playbook for … yet".
+- **`PlaybookReview.tsx`:**
+  - the intent box and the YAML textarea (no wrapping), with the source beside it (`SourcePanel`);
+  - **renaming rewrites the YAML's `intent:` line** (`renameIntent`), because `parse_playbook` rejects a
+    playbook that declares a different intent. Without this, every rename of run 21's `unknown` draft
+    would fail its check;
+  - `/check` runs 500 ms after each edit, together with `GET /playbooks/{intent}`. So "it becomes v2 of
+    site.grant_access (now v1, A3)" follows the rename, not the URL's intent;
+  - the autonomy picker allows up to the check's ceiling. A level picked earlier falls back to A2 if an
+    edit lowers the ceiling;
+  - Approve is disabled until the check passes. A 422 shows each problem, through `ApiError.problems`,
+    which now keeps a list `detail` as a list. Approving goes to the playbook's page.
+- **`Playbooks.tsx`:**
+  - `AutonomyPicker`, with each level's meaning, and the "A3 needs a successful approved run" note under
+    an A2 ceiling;
+  - `SourcePanel`: the ticket and the run's verified steps by agent or technician, with findings; or the
+    audit changes; or the written prose (Part 6);
+  - `PlaybookVersions`: autonomy (`/autonomy`), the current YAML with its source run and approver, and
+    each version's YAML in a `<details>`, newest first.
+- **`lib/playbooks.ts` (pure):** `allowedLevels`, `defaultLevel`, `renameIntent`, `sourceView`,
+  `LEVEL_TEXT` and `SOURCE_TEXT`.
+- **Fixtures:** `snapshot-run21.json` and `snapshot-run24.json`, `GET /runs/{id}` from `data/tech.db`.
+
+**Checked against `data/tech.db`.** The check route reads only. Approve and the autonomy buttons were not
+clicked, since they'd change your library.
+
+- **`/playbooks/unknown?run=21`:**
+  - the draft is beside "Ticket · run #21", "✔ group.addMember by aditya" and the findings;
+  - "✖ name the job" while it's `unknown`;
+  - renamed to `site.grant_access`, the YAML says so, it shows "✔ Passes every check" and "it becomes v2 of
+    site.grant_access (now v1, A3)", and A3 is offered (a technician run).
+- **`/playbooks/user.update_title?run=24`:** it shows "Draft learned from the audit logs" and the audit
+  change, it passes, it becomes v2 (now v1, A2), and A3 is held back with the note.
+- **`/playbooks/site.grant_access`:** A3 is selected, with "learned from a technician's run (run #21) ·
+  approved by aditya", the YAML and the versions.
+
+**Result:**
+
+- Web: `npm test` (38: +5 in `playbooks.test.ts`), `typecheck`, `lint` and `build` are green.
+- Backend: unchanged, 511 passed.
+
 ## Part 6: `/playbooks/new` and the library
 
 - `app/playbooks/new/page.tsx`:
