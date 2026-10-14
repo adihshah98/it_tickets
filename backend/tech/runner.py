@@ -228,6 +228,10 @@ async def technician_step(rt: Runtime, run_id: int, action: str, params: dict[st
         await _confirm(rt, run_id, transcript, guid, actor)
     if action == "file.restoreVersion" and (problems := file_problems(step_params, transcript)):
         raise RunError(" ".join(problems))
+    # The reply and PSA note name the group, not a GUID (Build-Day21 decision 5): its name is from the reads.
+    if ("groupName" in spec.params.model_fields and not step_params.get("groupName")
+            and (name := transcript.object(step_params.get("groupId") or "").get("displayName"))):
+        step = step.model_copy(update={"params": step.params.model_copy(update={"groupName": name})})
 
     writes = len(rt.store.events_of(run_id, "step_started"))
     decision = gate.evaluate_technician(step, facts=rt.facts, transcript=transcript, writes_so_far=writes)

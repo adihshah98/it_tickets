@@ -83,6 +83,20 @@ async def test_a_technician_step_is_gated_run_and_verified_as_theirs(rt, tenant,
     assert bypasses(rt.store.events(escalated)) == []
 
 
+async def test_a_console_step_names_its_group_from_the_reads(rt, tenant, escalated):
+    """Build-Day21 decision 5: run 21's reply said "the requested group" because the step had only GUIDs."""
+    supervisors = tenant.add_group(str(uuid.uuid4()), "Parking Supervisors", "security")
+    await runner.technician_step(rt, escalated, "group.addMember", {"groupId": FINANCE_FILES, "userId": MARCUS},
+                                 by="aditya")
+    await runner.technician_step(rt, escalated, "group.addMember", {"groupId": supervisors, "userId": MARCUS},
+                                 by="aditya")  # a typed ID: named by its confirming read
+    await runner.technician_step(rt, escalated, "group.addMember",
+                                 {"groupId": ACCOUNTING, "userId": MARCUS, "groupName": "Accounting team"}, by="aditya")
+
+    assert [p["params"]["groupName"] for p in payloads(rt, escalated, "step_started")] == [
+        "Finance Files", "Parking Supervisors", "Accounting team"]  # a name the technician gave is kept
+
+
 async def test_the_next_step_gets_the_next_id(rt, tenant, escalated):
     await runner.technician_step(rt, escalated, "group.addMember", {"groupId": FINANCE_FILES, "userId": MARCUS},
                                  by="aditya")
@@ -278,7 +292,7 @@ async def test_the_snapshot_shows_the_console_steps(rt, tenant, escalated):
     await add_marcus(rt, escalated)
     await runner.technician_step(rt, escalated, "group.addMember", {"groupId": IT_ADMINS, "userId": MARCUS},
                                  by="aditya")
-    shown = api.snapshot(rt.store, escalated, "http://ui.test", DOMAIN)["technician_steps"]
+    shown = api.snapshot(rt.store, escalated, "http://ui.test", DOMAIN, rt.library)["technician_steps"]
     assert [(t["step_id"], t["action"], t["status"], t["rule_id"]) for t in shown] == [
         ("t1", "group.addMember", "verified", "technician.self"),
         ("t2", "group.addMember", "blocked", "never.privileged_group")]

@@ -204,3 +204,24 @@ def test_set_autonomy_checks_the_level_and_the_playbook(rt):
         rt.library.set_autonomy(INTENT, "A3", by="aditya")
     rt.library.set_autonomy("mfa.reset", "A1", by="aditya")  # shipped: the client's call, up to A3
     assert rt.library.autonomy()["mfa.reset"] == "A1"
+
+
+# ------------------------------------------------------------------ reset (Build-Day21 decision 15)
+
+
+def test_reset_learned_goes_back_to_the_shipped_library(rt):
+    shipped = rt.library.current("user.onboard")
+    rt.library.add_version("user.onboard", shipped.yaml, source="written")  # retires the shipped v1
+    add_learned_restore(rt.library, "A3")
+    rt.library.set_autonomy("mfa.reset", "A1", by="aditya")
+    assert rt.library.current("user.onboard").version == 2
+
+    deleted = rt.library.reset_learned()
+
+    assert sorted((r.intent, r.version) for r in deleted) == [("file.restore_version", 1), ("user.onboard", 2)]
+    assert rt.library.intents() == ["mfa.reset", "user.offboard", "user.onboard"]
+    current = rt.library.current("user.onboard")
+    assert (current.version, current.source, current.status) == (1, "shipped", "approved")
+    assert rt.library.autonomy() == rt.facts.autonomy
+    assert rt.library.unproven() == set()
+    assert rt.library.reset_learned() == []  # already shipped

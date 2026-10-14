@@ -10,6 +10,7 @@
     uv run tech close 21 --by aditya [--note "Taylor confirmed by phone"]  # close it: DoD, reply, PSA note
     uv run tech audit-draft 21 --by aditya [--autonomy A2]   # "I fixed it in the admin center"
     uv run tech save-playbook 20 --by aditya [--intent file.restore_version] [--autonomy A3] [--yes]
+    uv run tech library reset [--yes]                    # back to the shipped playbooks; runs stay
 
 `run` triages, investigates (linter in the loop), gates and, with nothing to approve, executes.
 `approve` executes an approved plan. Each prints the run's events as they are appended (the same
@@ -213,6 +214,24 @@ def review_and_save(rt: runner.Runtime, run_id: int, draft: Draft, *, by: str, a
     return 0
 
 
+async def library_reset(rt: runner.Runtime, *, yes: bool = False, ask: Callable[[str], str] = input) -> int:
+    """Back to the shipped playbooks: delete learned and written versions, clear autonomy overrides. Runs stay."""
+    learned = [row for intent in rt.library.intents() for row in rt.library.versions(intent) if row.source != "shipped"]
+    levels = rt.library.autonomy()
+    if not learned and levels == rt.facts.autonomy:
+        print("the library is already the shipped one")
+        return 0
+    for row in learned:
+        print(f"   delete {row.intent} v{row.version} ({row.source}, {row.status})")
+    print(f"   autonomy back to client facts: {rt.facts.autonomy}")
+    if not yes and ask("reset the library? [y/N] ").strip().lower() not in ("y", "yes"):
+        print("not reset")
+        return 1
+    deleted = rt.library.reset_learned()
+    print(f"deleted {len(deleted)} version(s); intents now: {', '.join(rt.library.intents())}")
+    return 0
+
+
 def parse_params(pairs: list[str]) -> dict[str, object]:
     """key=value pairs; a value that reads as JSON (false, 3, ["a"]) is taken as that, else as text."""
     params: dict[str, object] = {}
@@ -277,6 +296,9 @@ def main() -> None:
     save_p.add_argument("--intent", help="the job's intent slug, if not the one the run proposes")
     save_p.add_argument("--autonomy", choices=["A1", "A2", "A3"], default="A2")
     save_p.add_argument("--yes", action="store_true", help="save without asking")
+    library_p = sub.add_parser("library", help="the playbook library")
+    library_p.add_argument("action", choices=["reset"], help="reset: back to the shipped playbooks (runs stay)")
+    library_p.add_argument("--yes", action="store_true", help="reset without asking")
     args = parser.parse_args()
 
     match args.command:
@@ -317,6 +339,8 @@ def main() -> None:
         case "save-playbook":
             code = asyncio.run(with_runtime(lambda rt: save_playbook(
                 rt, args.run_id, by=args.by, intent=args.intent, autonomy=args.autonomy, yes=args.yes)))
+        case "library":
+            code = asyncio.run(with_runtime(lambda rt: library_reset(rt, yes=args.yes)))
     sys.exit(code)
 
 

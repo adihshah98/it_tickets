@@ -423,3 +423,89 @@ async def test_a_written_playbook_is_drafted_then_capped_below_a3(client, rt):
 async def test_autonomy_on_an_unknown_intent_is_a_404(client):
     assert (await client.post("/playbooks/file.nothing/autonomy", json={"level": "A2", "by": "x"})).status_code == 404
     assert (await client.get("/playbooks/file.nothing")).status_code == 404
+
+
+# ------------------------------------------------------------------ the web's learning screens (Build-Day21 part 1)
+
+
+def planless(rt, intents: list[str]) -> int:
+    """A run that escalated on the investigation timeout, before it had a plan (run 21 live)."""
+    from tech.core.models import Requester, Triage, TriageEntities
+
+    store = rt.store
+    run_id = store.create_run(store.create_ticket("give Jordan the ops site", TAYLOR).id).id
+    triage = Triage(intents=intents, entities=TriageEntities(), requester=Requester(name="Taylor", email=TAYLOR))
+    store.append_event(run_id, "triage", {"triage": triage.model_dump(mode="json"), "requester_approved": True,
+                                          "requester_scopes": {}})
+    for state in (RunState.TRIAGED, RunState.INVESTIGATING):
+        store.set_state(run_id, state)
+    store.set_state(run_id, RunState.ESCALATED, kind="timeout", reason="investigation took longer than 60 s")
+    return run_id
+
+
+async def test_the_snapshot_says_whether_the_run_had_a_playbook(client, rt, gated, restore_gated):
+    snap = lambda run_id: client.get(f"/runs/{run_id}")  # noqa: E731
+
+    onboarding = (await snap(gated())).json()
+    assert onboarding["no_playbook"] is False
+    assert onboarding["playbooks_used"] == []  # the fixture's plan event doesn't record versions
+
+    restore, _, _ = restore_gated()
+    assert (await snap(restore)).json()["no_playbook"] is True
+
+    # no plan: whether the library has a playbook for the triaged intents now
+    assert (await snap(planless(rt, ["unknown"]))).json()["no_playbook"] is True
+    assert (await snap(planless(rt, ["user.onboard"]))).json()["no_playbook"] is False
+
+    fresh = rt.store.create_run(rt.store.create_ticket("hi", TAYLOR).id).id
+    assert (await snap(fresh)).json()["no_playbook"] is None  # not triaged yet
+
+
+async def test_the_snapshot_names_the_learned_playbook_a_run_followed(client, rt, restore_gated):
+    run_id, _, _ = restore_gated(learned="A3")
+    snap = (await client.get(f"/runs/{run_id}")).json()
+    assert snap["no_playbook"] is False
+    assert snap["playbooks_used"] == [
+        {"intent": RESTORE, "version": 1, "source": "agent_run", "source_run_id": None}]
+
+    rt.library.reset_learned()  # the version is gone; the run still says which one it used
+    assert (await client.get(f"/runs/{run_id}")).json()["playbooks_used"] == [
+        {"intent": RESTORE, "version": 1, "source": None, "source_run_id": None}]
+
+
+async def test_the_catalogue_marks_what_the_console_offers(client):
+    actions = {a["name"]: a for a in (await client.get("/catalogue")).json()}
+
+    add = actions["group.addMember"]
+    assert add["console"] is True and add["risk_class"] == "write.reversible"
+    assert {"groupId", "userId", "groupName"} <= add["params"]["properties"].keys()
+    assert set(add["params"]["required"]) == {"groupId", "userId"}
+    assert actions["user.update"]["console"] is True  # disabling is access.revoke, which a technician may do
+    not_console = {name for name, a in actions.items() if not a["console"]}
+    assert not_console == {"tap.create", "authMethod.delete", "license.purchase", "mailbox.forwardRule",
+                           "group.addOwner", "link.sendOneTime", "followup.schedule"}
+
+
+async def test_check_gives_problems_and_the_ceiling_without_saving(client, rt, restore_gated):
+    run_id = await done_restore(rt, restore_gated)
+    text = LEARNED_RESTORE.read_text()
+    check = lambda yaml, **kw: client.post(f"/playbooks/{RESTORE}/check", json={  # noqa: E731
+        "yaml": yaml, "source": "agent_run", "source_run_id": run_id} | kw)
+
+    assert (await check(text)).json() == {"problems": [], "ceiling": "A3"}
+    widened = (await check(text.replace("[file.restoreVersion]", "[file.restoreVersion, tap.create]"))).json()
+    assert widened["ceiling"] is None
+    assert "allowed_actions has tap.create, which the run it was learned from never did." in widened["problems"]
+    assert (await check(text, source="written", source_run_id=None)).json() == {"problems": [], "ceiling": "A2"}
+    assert (await client.get(f"/playbooks/{RESTORE}")).status_code == 404  # nothing saved
+
+
+async def test_each_version_carries_its_yaml(client, rt, restore_gated):
+    run_id = await done_restore(rt, restore_gated)
+    text = LEARNED_RESTORE.read_text()
+    for autonomy in ("A2", "A3"):
+        r = await client.post(f"/playbooks/{RESTORE}/approve", json={
+            "yaml": text, "autonomy": autonomy, "by": "aditya", "source": "agent_run", "source_run_id": run_id})
+        assert r.status_code == 201, r.text
+    versions = (await client.get(f"/playbooks/{RESTORE}")).json()["versions"]
+    assert [(v["version"], v["status"], v["yaml"]) for v in versions] == [(1, "retired", text), (2, "approved", text)]

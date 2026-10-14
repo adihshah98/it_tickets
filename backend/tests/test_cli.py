@@ -100,3 +100,19 @@ async def test_save_playbook_saves_nothing_on_no_or_a_failing_draft(rt, restore_
     assert await save_playbook(rt, run_id, by="aditya", yes=True) == 1
     assert "'file_is_fine', which is not a probe" in capsys.readouterr().out
     assert not rt.library.has("file.restore_version")
+
+
+async def test_library_reset_lists_asks_and_resets(rt, capsys):
+    from conftest import add_learned_restore
+
+    from tech.cli import library_reset
+
+    add_learned_restore(rt.library, "A3")
+    assert await library_reset(rt, ask=lambda _: "n") == 1
+    assert rt.library.has("file.restore_version")
+    assert "delete file.restore_version v1 (agent_run, approved)" in capsys.readouterr().out
+
+    assert await library_reset(rt, ask=lambda _: "y") == 0
+    assert not rt.library.has("file.restore_version")
+    assert await library_reset(rt) == 0
+    assert "already the shipped one" in capsys.readouterr().out

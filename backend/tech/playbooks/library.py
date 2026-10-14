@@ -134,16 +134,35 @@ class PlaybookLibrary:
         """Approve a learned or written playbook as the intent's next version, at this autonomy level.
         Everything is checked again here, whatever a draft said: the slug, the code checks (against the
         source run's verified actions, rebuilt from the store) and the autonomy ceiling."""
+        problems, ceiling = self.check(intent, text, source=source, source_run_id=source_run_id)
+        if autonomy not in LEVELS:
+            problems.append(f"autonomy must be one of {', '.join(LEVELS)}, not {autonomy!r}")
+        if not by.strip():
+            problems.append("an approved playbook needs an approver (by)")
+        if autonomy == "A3" and ceiling == "A2":
+            problems.append("A3 needs a successful approved run on this playbook first; approve it at A1 or A2")
+        if problems:
+            raise PlaybookRejected(problems)
+
+        row = self._add_approved(intent, text, source=source, source_run_id=source_run_id, approved_by=by)
+        self._set_level(intent, autonomy, by)
+        if source_run_id is not None:
+            self.store.append_event(source_run_id, "playbook_approved", {
+                "intent": intent, "version": row.version, "source": source, "autonomy": autonomy, "by": by})
+            self._record_learned(row, source_run_id)
+        return row
+
+    def check(self, intent: str, text: str, *, source: str,
+              source_run_id: int | None = None) -> tuple[list[str], str | None]:
+        """Everything `approve` checks about the playbook itself, without saving it: (problems, ceiling). The
+        ceiling is the highest autonomy it could be approved at, or None while it has problems. The review
+        screen calls this as the YAML is edited (Build-Day21 decision 11)."""
         from tech.agents.intake import near_duplicate
         from tech.safety import playbook_check
 
         problems = []
         if source not in SOURCES or source == "shipped":
             problems.append(f"source must be one of {', '.join(SOURCES[1:])}, not {source!r}")
-        if autonomy not in LEVELS:
-            problems.append(f"autonomy must be one of {', '.join(LEVELS)}, not {autonomy!r}")
-        if not by.strip():
-            problems.append("an approved playbook needs an approver (by)")
         try:
             TypeAdapter(IntentSlug).validate_python(intent)
         except ValidationError:
@@ -166,18 +185,7 @@ class PlaybookLibrary:
                 problems.append("an audit_log playbook needs a source run whose audit logs showed a change to learn")
         problems += playbook_check.check(text, intent, observed=observed)
         ceiling = None if problems else self.ceiling(intent, source=source, source_run_id=source_run_id)
-        if autonomy == "A3" and ceiling == "A2":
-            problems.append("A3 needs a successful approved run on this playbook first; approve it at A1 or A2")
-        if problems:
-            raise PlaybookRejected(problems)
-
-        row = self._add_approved(intent, text, source=source, source_run_id=source_run_id, approved_by=by)
-        self._set_level(intent, autonomy, by)
-        if source_run_id is not None:
-            self.store.append_event(source_run_id, "playbook_approved", {
-                "intent": intent, "version": row.version, "source": source, "autonomy": autonomy, "by": by})
-            self._record_learned(row, source_run_id)
-        return row
+        return problems, ceiling
 
     def audit_actions(self, run_id: int) -> set[str] | None:
         """The actions the run's audit logs showed (its last `audit_observed` with changes), or None."""
@@ -249,6 +257,26 @@ class PlaybookLibrary:
         self.learned_dir.mkdir(parents=True, exist_ok=True)
         path = self.learned_dir / f"{row.intent}-v{row.version}-run{run_id}.yaml"
         path.write_text(yaml.safe_dump(record, sort_keys=False, allow_unicode=True))
+
+    def reset_learned(self) -> list[PlaybookVersion]:
+        """Back to the shipped library, for a demo reset (Build-Day21 decision 15): every learned or written
+        version is deleted, the newest shipped version of an intent they had retired is approved again, and
+        the per-intent autonomy overrides are cleared. Runs and their events stay. Returns the deleted rows."""
+        with self.store.session() as s:
+            learned = list(s.exec(select(PlaybookVersion).where(PlaybookVersion.source != "shipped")))
+            for row in learned:
+                s.delete(row)
+            for override in s.exec(select(ClientAutonomy)):
+                s.delete(override)
+            s.flush()
+            for intent in {row.intent for row in learned}:
+                shipped = s.exec(select(PlaybookVersion).where(PlaybookVersion.intent == intent)
+                                 .order_by(col(PlaybookVersion.version).desc())).first()
+                if shipped is not None and shipped.status != "approved":
+                    shipped.status = "approved"
+                    s.add(shipped)
+            s.commit()
+        return learned
 
     # -------------------------------------------------------------- autonomy
 

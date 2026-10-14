@@ -11,14 +11,16 @@
     POST /followups/{id}/run-now     run a scheduled follow-up now (the demo's license assignment)
     POST /runs/{id}/manual-step      "Do it myself": one catalogue action by a technician on an ESCALATED run
     GET  /runs/{id}/observed         the users, groups and files the run's reads saw (the console's ID picker)
+    GET  /catalogue                  every write action with its params schema; `console` marks the console's
     POST /runs/{id}/close            close a run a technician finished in the console; close-out in the background
     POST /runs/{id}/audit-draft      "I fixed it in the admin center": poll the audit logs, then draft (background)
     POST /runs/{id}/playbook-draft   "Save as playbook": the drafter's YAML from a finished run (not saved)
     POST /playbooks                  a written playbook (prose or YAML) -> a draft (not saved)
+    POST /playbooks/{intent}/check   a draft's problems and autonomy ceiling, as edited (nothing saved)
     POST /playbooks/{intent}/approve save a draft (as edited) as the intent's next version, at an autonomy level
     POST /playbooks/{intent}/autonomy set the client's autonomy for an intent, within its ceiling
     GET  /playbooks                  every intent with a playbook: version, source, autonomy, ceiling
-    GET  /playbooks/{intent}         one intent: the current YAML and every version
+    GET  /playbooks/{intent}         one intent: the current YAML and every version (each with its YAML)
     GET  /l/{token}                  one-time link: who it's for and when it expires, never the TAP
     POST /l/{token}/reveal           one-time link: the TAP, once
 
@@ -52,8 +54,10 @@ from tech.agents.drafter import Draft, draft
 from tech.core.config import Settings
 from tech.core.store import Event, NotFound, RunState, Store
 from tech.execution import links, scheduler
+from tech.execution.catalogue import ACTIONS
 from tech.learning.sources import from_written
 from tech.playbooks import PlaybookLibrary, PlaybookRejected
+from tech.safety import gate
 
 TERMINAL = {s.value for s in runner.TERMINAL}
 DEFAULT_WEB_ORIGIN = "http://localhost:3000"
@@ -155,7 +159,7 @@ def _step_status(store: Store, run_id: int) -> dict[str, dict[str, Any]]:
     return status
 
 
-def snapshot(store: Store, run_id: int, web_origin: str, domain: str) -> dict[str, Any]:
+def snapshot(store: Store, run_id: int, web_origin: str, domain: str, library: PlaybookLibrary) -> dict[str, Any]:
     """The run as the workspace shows it, rebuilt from its events. Plan params are the effective ones (the
     approver's answers applied). `last_seq` is where the event stream should pick up."""
     run = store.get_run(run_id)
@@ -219,7 +223,31 @@ def snapshot(store: Store, run_id: int, web_origin: str, domain: str) -> dict[st
         "audit": audit.payload if (audit := store.last_event(run_id, "audit_observed")) else None,
         "playbook_draft": draft.payload if (draft := store.last_event(run_id, "playbook_drafted")) else None,
         "can_save_playbook": runner.can_save_playbook(store, run_id),
+        "no_playbook": _no_playbook(plan_event, triage, library),
+        "playbooks_used": _playbooks_used(plan_event, library),
     }
+
+
+def _no_playbook(plan_event: Event | None, triage: Event | None, library: PlaybookLibrary) -> bool | None:
+    """Whether the run had no playbook to follow (the workspace's banner). The plan records it; a run that
+    escalated before planning has no plan, so it's whether the library has one for the triaged intents *now*
+    (Build-Day21 decision 1). None before triage."""
+    if plan_event is not None:
+        return bool(plan_event.payload.get("no_playbook"))
+    if triage is None:
+        return None
+    return not library.for_intents(triage.payload["triage"]["intents"])
+
+
+def _playbooks_used(plan_event: Event | None, library: PlaybookLibrary) -> list[dict[str, Any]]:
+    """The playbook versions the run followed, with where each came from (the workspace's learned badge).
+    A version deleted since (a demo reset) has source None."""
+    used = (plan_event.payload.get("playbook_versions") or {}) if plan_event else {}
+    rows = {(intent, row.version): row for intent in used for row in library.versions(intent)}
+    return [{"intent": intent, "version": version,
+             "source": row.source if (row := rows.get((intent, version))) else None,
+             "source_run_id": row.source_run_id if row else None}
+            for intent, version in used.items()]
 
 
 def _technician_steps(store: Store, run_id: int) -> list[dict[str, Any]]:
@@ -286,6 +314,12 @@ class ApproveIn(BaseModel):
     source_run_id: int | None = None
 
 
+class CheckIn(BaseModel):
+    yaml: str = Field(min_length=1)
+    source: Literal["agent_run", "technician_run", "written", "audit_log"]
+    source_run_id: int | None = None
+
+
 class AutonomyIn(BaseModel):
     level: Literal["A1", "A2", "A3"]
     by: str = Field(min_length=1)
@@ -294,6 +328,20 @@ class AutonomyIn(BaseModel):
 def draft_view(d: Draft) -> dict[str, Any]:
     return {"intent": d.intent, "yaml": d.yaml, "problems": d.problems, "ok": d.ok, "source": d.source.kind,
             "source_run_id": d.source.run_id}
+
+
+# Our own services, not changes in the tenant: a technician sends links and sets reminders themselves.
+NOT_IN_CONSOLE = {"link.sendOneTime", "followup.schedule"}
+
+
+def catalogue_view() -> list[dict[str, Any]]:
+    """Every catalogue action, for the console's action picker (`console`) and a written playbook's allowed
+    actions (all of them). `console` is false for what the gate always blocks for a technician, by the
+    action's fixed risk class, and for our services; the gate still decides each step."""
+    return [{"name": spec.name, "risk_class": spec.risk_class, "verify": spec.verify, "compensate": spec.compensate,
+             "params": spec.params.model_json_schema(by_alias=True),
+             "console": spec.risk_class not in gate.TECHNICIAN_BLOCKED and spec.name not in NOT_IN_CONSOLE}
+            for spec in ACTIONS.values()]
 
 
 def playbook_view(library: PlaybookLibrary, intent: str) -> dict[str, Any]:
@@ -362,7 +410,7 @@ def create_app(runtime: runner.Runtime | None = None, *, web_origin: str = DEFAU
 
     @app.get("/runs/{run_id}")
     async def get_run(run_id: int) -> dict[str, Any]:
-        return snapshot(rt.store, run_id, web_origin, rt.domain)
+        return snapshot(rt.store, run_id, web_origin, rt.domain, rt.library)
 
     def existing_run(run_id: int) -> int:
         """A dependency, so an unknown run is a 404 before a stream starts."""
@@ -430,6 +478,10 @@ def create_app(runtime: runner.Runtime | None = None, *, web_origin: str = DEFAU
         tasks.spawn(run_id, runner.audit_draft(rt, run_id, by=body.by), what="audit-draft", escalate=False)
         return {"state": rt.store.get_run(run_id).state.value}
 
+    @app.get("/catalogue")
+    async def catalogue() -> list[dict[str, Any]]:
+        return catalogue_view()
+
     @app.get("/runs/{run_id}/observed")
     async def observed(run_id: int = Depends(existing_run)) -> list[dict[str, Any]]:
         return runner.observed_objects(rt.store, run_id)
@@ -449,6 +501,12 @@ def create_app(runtime: runner.Runtime | None = None, *, web_origin: str = DEFAU
                            source_run_id=body.source_run_id)
         return playbook_view(rt.library, intent)
 
+    @app.post("/playbooks/{intent}/check")
+    async def check_playbook(intent: str, body: CheckIn) -> dict[str, Any]:
+        """Approve's checks without saving: the review screen's inline results. Code only, no model call."""
+        problems, ceiling = rt.library.check(intent, body.yaml, source=body.source, source_run_id=body.source_run_id)
+        return {"problems": problems, "ceiling": ceiling}
+
     @app.post("/playbooks/{intent}/autonomy")
     async def playbook_autonomy(intent: str, body: AutonomyIn) -> dict[str, Any]:
         if not rt.library.has(intent):
@@ -465,7 +523,7 @@ def create_app(runtime: runner.Runtime | None = None, *, web_origin: str = DEFAU
         if not rt.library.has(intent):
             raise HTTPException(404, f"no playbook for {intent!r}")
         versions = [{"version": v.version, "status": v.status, "source": v.source, "source_run_id": v.source_run_id,
-                     "approved_by": v.approved_by, "created_at": v.created_at.isoformat()}
+                     "approved_by": v.approved_by, "created_at": v.created_at.isoformat(), "yaml": v.yaml}
                     for v in rt.library.versions(intent)]
         return playbook_view(rt.library, intent) | {"yaml": rt.library.current(intent).yaml, "versions": versions}
 
