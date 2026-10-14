@@ -163,6 +163,7 @@ async def test_files_search_is_one_search_query_kept_to_team_sites(graph, transc
         ("d1", rates),
         ("d1", {"id": "i2", "name": "rates", "lastModifiedDateTime": "t", "folder": {}}),          # a folder
         ("onedrive", {"id": "i3", "name": "rates.xlsx", "lastModifiedDateTime": "t", "file": {}})))  # not a site
+    respx.get(f"{GRAPH}/drives/d1/items/i1").mock(return_value=httpx.Response(200, json={"id": "i1"}))
 
     [hit] = await run_read(graph, transcript, "files.search", query="rates")
 
@@ -245,3 +246,17 @@ async def test_files_search_finds_a_fresh_upload_before_the_index_does(tenant, g
     tenant.search_lag = 1
     [hit] = await run_read(graph, transcript, "files.search", query="Q3 Parking Rates")
     assert hit["name"] == "Q3 Parking Rates.xlsx" and hit["drive_id"].startswith("b!")
+
+
+async def test_files_search_drops_a_deleted_file_the_index_still_returns(tenant, graph, transcript):
+    """Live (Build-Day21 part 7): right after the demo reset re-uploaded the files, the search index returned the
+    deleted copy's item ID (files.versions -> 404) and didn't know the new one yet."""
+    site = tenant.add_group("0c0c0c0c-0000-4000-8000-000000000001", "Northwind Operations", "m365")
+    drive = tenant.add_drive(site)
+    fresh, _ = tenant.add_file(drive, "Staffing Plan.xlsx", [("2026-10-14T19:27:20Z", 12690)])
+    tenant.stale_hits = [{"drive": drive, "id": "01DELETED", "name": "Staffing Plan.xlsx"}]
+    tenant.search_lag = 1  # and the fresh upload isn't indexed yet
+
+    [hit] = await run_read(graph, transcript, "files.search", query="Staffing Plan")
+
+    assert hit["item_id"] == fresh

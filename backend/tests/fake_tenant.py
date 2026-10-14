@@ -13,7 +13,8 @@ the license pool), so the eval harness can run a whole ticket against it. Groups
 Team-site files (`add_drive`/`add_file`) have a version history, newest first like Graph's, with
 SharePoint-shaped IDs (`b!…` drives, `01…` items, `2.0` versions). A restore appends a copy of the chosen
 version as the new current one, as SharePoint does. File search is the Microsoft Search API's
-`POST /search/query`; `search_lag` makes the next N searches find nothing.
+`POST /search/query`; `search_lag` makes the next N searches find nothing, and `stale_hits` are deleted
+files the index still returns.
 """
 
 from __future__ import annotations
@@ -59,6 +60,7 @@ class FakeTenant:
         self.files: dict[str, dict] = {}            # itemId -> {id, name, drive, versions (newest first)}
         self.contents: dict[tuple[str, str], bytes] = {}  # (itemId, versionId) -> that version's bytes
         self.search_lag = 0  # searches that find nothing yet (the index trails a fresh upload)
+        self.stale_hits: list[dict] = []  # files the index still returns after they were deleted: {drive, id, name}
         self.audits: list[dict] = []  # directoryAudits entries, shaped as the Day 20 spike recorded them
         self.seat_holder = self.add_user("seat-holder", "Seat Holder")
 
@@ -123,18 +125,25 @@ class FakeTenant:
         Microsoft Search API answers (hitsContainers of hits with a driveItem `resource`)."""
         [request] = body["requests"]
         assert request["entityTypes"] == ["driveItem"] and request["region"], request
-        if self.search_lag:
+        words = request["query"]["queryString"].casefold().split()
+        indexed = [{"id": f["id"], "name": f["name"], "drive": f["drive"], "file": {},
+                    "lastModifiedDateTime": "2026-10-13T00:00:00Z"} for f in self.stale_hits]
+        if self.search_lag:  # the index hasn't caught up: it knows only what it knew before (the stale hits)
             self.search_lag -= 1
-            hits = []
         else:
-            words = request["query"]["queryString"].casefold().split()
-            hits = [{"hitId": f["id"], "resource": self._item(f) | {"parentReference": {"driveId": f["drive"]}}}
-                    for f in self.files.values() if all(w in f["name"].casefold() for w in words)]
+            indexed += [{**self._item(f), "drive": f["drive"]} for f in self.files.values()]
+        hits = [{"hitId": f["id"], "resource": {k: v for k, v in f.items() if k != "drive"}
+                 | {"parentReference": {"driveId": f["drive"]}}}
+                for f in indexed if all(w in f["name"].casefold() for w in words)]
         return httpx.Response(200, json={"value": [{"searchTerms": [], "hitsContainers": [
             {"hits": hits, "total": len(hits), "moreResultsAvailable": False}]}]})
 
     def _drive_route(self, method: str, drive_id: str, rest: str) -> httpx.Response:
         items = [f for f in self.files.values() if f["drive"] == drive_id]
+        if method == "GET" and (m := re.fullmatch(r"/items/([^/]+)", rest)):
+            if (item := self.files.get(m.group(1))) is None or item["drive"] != drive_id:
+                return error(404, "The resource could not be found.", "itemNotFound")
+            return httpx.Response(200, json=self._item(item))
         if rest == "/root/children":
             return httpx.Response(200, json={"value": [self._item(f) for f in items]})
         if m := re.fullmatch(r"/items/([^/]+)(?:/versions/([^/]+))?/content", rest):

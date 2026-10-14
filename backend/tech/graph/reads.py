@@ -253,8 +253,9 @@ async def files_search(graph: GraphClient, query: str) -> list[dict]:
     """Search the document libraries of every Microsoft 365 group (team sites) for files, with one Microsoft
     Search query (POST /search/query). Each library's own `root/search` was one call per site, and Graph throttles
     those (429, Retry-After 30 s): live on Day 21 a search took 37 s, over the no-playbook bound. Hits outside
-    the team sites (OneDrive) are dropped. If the search finds nothing, each library's top-level files whose names
-    hold every word of the query are returned instead: the index can trail a fresh upload by minutes."""
+    the team sites (OneDrive), and hits for files since deleted, are dropped. If nothing is left, each library's
+    top-level files whose names hold every word of the query are returned instead: the index can trail a fresh
+    upload by minutes."""
     groups = [g async for g in graph.list("/groups", {"$filter": "groupTypes/any(c:c eq 'Unified')",
                                                       "$select": "id,displayName"})]
 
@@ -272,6 +273,20 @@ async def files_search(graph: GraphClient, query: str) -> list[dict]:
              for response in result.get("value", []) for container in response.get("hitsContainers", [])
              for hit in container.get("hits", []) if "file" in hit["resource"]]
     items = [(drive, it) for drive, it in items if drive in sites]
+
+    async def still_there(drive: str, item: dict) -> bool:
+        try:
+            await graph.get(f"/drives/{drive}/items/{item['id']}", params={"$select": "id"})
+            return True
+        except GraphError as exc:
+            if exc.status == 404:
+                return False
+            raise
+
+    # the index can still return a file deleted minutes ago (live, right after the demo reset re-uploaded the files:
+    # the old item ID, then a 404 on its versions), so each hit is confirmed with one item read
+    kept = await asyncio.gather(*(still_there(drive, it) for drive, it in items))
+    items = [hit for hit, ok in zip(items, kept, strict=True) if ok]
     if not items:
         words = query.casefold().split()
 
