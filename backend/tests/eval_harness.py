@@ -339,7 +339,7 @@ def check(case: dict[str, Any], expect: dict[str, Any], store: Store, run_id: in
             fail("DoD probes run", sorted(want["probes"]), sorted({c["probe"] for c in checks}))
 
     if (want := expect.get("writes")) is not None:
-        writes = [f"{m} {p}" for m, p, _ in tenant.calls if m != "GET"]
+        writes = tenant.writes()
         if len(writes) != want:
             fail("Graph writes", want, writes)
 

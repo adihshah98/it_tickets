@@ -245,27 +245,43 @@ async def message_rules(graph: GraphClient, user_id: str) -> list[dict]:
     return rules
 
 
+# The Microsoft Search API needs the tenant's data region for app-only calls (the demo tenant is in North America).
+SEARCH_REGION = "NAM"
+
+
 async def files_search(graph: GraphClient, query: str) -> list[dict]:
-    """Search the document libraries of every Microsoft 365 group (team sites) for files. Where a library's
-    search finds nothing, its top-level files whose names hold every word of the query are returned instead."""
+    """Search the document libraries of every Microsoft 365 group (team sites) for files, with one Microsoft
+    Search query (POST /search/query). Each library's own `root/search` was one call per site, and Graph throttles
+    those (429, Retry-After 30 s): live on Day 21 a search took 37 s, over the no-playbook bound. Hits outside
+    the team sites (OneDrive) are dropped. If the search finds nothing, each library's top-level files whose names
+    hold every word of the query are returned instead: the index can trail a fresh upload by minutes."""
     groups = [g async for g in graph.list("/groups", {"$filter": "groupTypes/any(c:c eq 'Unified')",
                                                       "$select": "id,displayName"})]
 
-    async def search(group: dict) -> list[dict]:
+    async def drive_of(group: dict) -> tuple[str, str] | None:
         try:
             drive = await graph.get(f"/groups/{group['id']}/drive", params={"$select": "id"})
-            page = await graph.get(f"/drives/{drive['id']}/root/search(q='{odata_str(query)}')")
-            items = page.get("value", [])
-            if not items:  # the search index can trail a fresh upload by minutes; the library's top folder can't
-                words = query.casefold().split()
-                items = [it async for it in graph.list(f"/drives/{drive['id']}/root/children")
-                         if "file" in it and all(w in it["name"].casefold() for w in words)]
         except GraphError:  # a group whose site was never provisioned
-            return []
-        return [{"site": group["displayName"], "drive_id": drive["id"], "item_id": it["id"], "name": it["name"],
-                 "lastModified": it["lastModifiedDateTime"]} for it in items]
+            return None
+        return drive["id"], group["displayName"]
 
-    return [hit for hits in await asyncio.gather(*map(search, groups)) for hit in hits]
+    sites = dict(d for d in await asyncio.gather(*map(drive_of, groups)) if d)  # drive id -> site name
+    result = await graph.post("/search/query", {"requests": [{
+        "entityTypes": ["driveItem"], "query": {"queryString": query}, "region": SEARCH_REGION, "size": 25}]})
+    items = [(hit["resource"]["parentReference"]["driveId"], hit["resource"])
+             for response in result.get("value", []) for container in response.get("hitsContainers", [])
+             for hit in container.get("hits", []) if "file" in hit["resource"]]
+    items = [(drive, it) for drive, it in items if drive in sites]
+    if not items:
+        words = query.casefold().split()
+
+        async def top_folder(drive: str) -> list[tuple[str, dict]]:
+            return [(drive, it) async for it in graph.list(f"/drives/{drive}/root/children")
+                    if "file" in it and all(w in it["name"].casefold() for w in words)]
+
+        items = [hit for hits in await asyncio.gather(*map(top_folder, sites)) for hit in hits]
+    return [{"site": sites[drive], "drive_id": drive, "item_id": it["id"], "name": it["name"],
+             "lastModified": it["lastModifiedDateTime"]} for drive, it in items]
 
 
 async def file_versions(graph: GraphClient, drive_id: str, item_id: str) -> list[dict]:

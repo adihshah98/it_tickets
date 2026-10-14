@@ -59,7 +59,7 @@ def escalated(rt, tenant):
 
 
 def writes(tenant) -> list[str]:
-    return [f"{m} {p}" for m, p, _ in tenant.calls if m != "GET"]
+    return tenant.writes()
 
 
 def payloads(rt, run_id, kind):

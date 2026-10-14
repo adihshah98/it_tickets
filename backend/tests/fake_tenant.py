@@ -12,7 +12,8 @@ the license pool), so the eval harness can run a whole ticket against it. Groups
 
 Team-site files (`add_drive`/`add_file`) have a version history, newest first like Graph's, with
 SharePoint-shaped IDs (`b!…` drives, `01…` items, `2.0` versions). A restore appends a copy of the chosen
-version as the new current one, as SharePoint does. `search_lag` makes the next N searches find nothing.
+version as the new current one, as SharePoint does. File search is the Microsoft Search API's
+`POST /search/query`; `search_lag` makes the next N searches find nothing.
 """
 
 from __future__ import annotations
@@ -117,15 +118,23 @@ class FakeTenant:
         return {"id": item["id"], "name": item["name"], "size": current["size"], "file": {},
                 "lastModifiedDateTime": current["lastModifiedDateTime"]}
 
+    def _search(self, body: dict) -> httpx.Response:
+        """POST /search/query for driveItems (files.search): files whose names hold every word, shaped as the
+        Microsoft Search API answers (hitsContainers of hits with a driveItem `resource`)."""
+        [request] = body["requests"]
+        assert request["entityTypes"] == ["driveItem"] and request["region"], request
+        if self.search_lag:
+            self.search_lag -= 1
+            hits = []
+        else:
+            words = request["query"]["queryString"].casefold().split()
+            hits = [{"hitId": f["id"], "resource": self._item(f) | {"parentReference": {"driveId": f["drive"]}}}
+                    for f in self.files.values() if all(w in f["name"].casefold() for w in words)]
+        return httpx.Response(200, json={"value": [{"searchTerms": [], "hitsContainers": [
+            {"hits": hits, "total": len(hits), "moreResultsAvailable": False}]}]})
+
     def _drive_route(self, method: str, drive_id: str, rest: str) -> httpx.Response:
         items = [f for f in self.files.values() if f["drive"] == drive_id]
-        if m := re.fullmatch(r"/root/search\(q='(.*)'\)", rest):
-            if self.search_lag:
-                self.search_lag -= 1
-                return httpx.Response(200, json={"value": []})
-            words = m.group(1).replace("''", "'").casefold().split()
-            return httpx.Response(200, json={"value": [self._item(f) for f in items
-                                                       if all(w in f["name"].casefold() for w in words)]})
         if rest == "/root/children":
             return httpx.Response(200, json={"value": [self._item(f) for f in items]})
         if m := re.fullmatch(r"/items/([^/]+)(?:/versions/([^/]+))?/content", rest):
@@ -183,6 +192,10 @@ class FakeTenant:
 
     # ------------------------------------------------------------ routing
 
+    def writes(self) -> list[str]:
+        """The calls that change the tenant: every non-GET, except the search query (a read sent as a POST)."""
+        return [f"{m} {p}" for m, p, _ in self.calls if m != "GET" and (m, p) != ("POST", "/search/query")]
+
     def __call__(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path.removeprefix("/v1.0")
         body = json.loads(request.content) if request.content else None
@@ -225,6 +238,8 @@ class FakeTenant:
         if method == "GET" and path == "/groups" and "Unified" in query:
             return httpx.Response(200, json={"value": [g for g in self.groups.values()
                                                        if "Unified" in g["groupTypes"]]})
+        if method == "POST" and path == "/search/query":
+            return self._search(body)
         if m := re.fullmatch(r"/groups/([^/]+)/drive", path):
             if (drive := self.drives.get(m.group(1).lower())) is None:
                 return error(404, "Resource not found for the segment 'drive'.", "itemNotFound")

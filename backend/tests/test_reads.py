@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 import respx
@@ -143,24 +145,39 @@ async def test_users_search_escapes_quotes(graph, transcript):
     assert "startswith(displayName,'O''Brien')" in route.calls.last.request.url.params["$filter"]
 
 
+def search_hits(*hits: tuple[str, dict]) -> httpx.Response:
+    """POST /search/query's answer: (drive id, driveItem) pairs as hits."""
+    return httpx.Response(200, json={"value": [{"hitsContainers": [{"hits": [
+        {"hitId": item["id"], "resource": item | {"parentReference": {"driveId": drive}}} for drive, item in hits],
+        "total": len(hits), "moreResultsAvailable": False}]}]})
+
+
 @respx.mock
-async def test_files_search_skips_groups_without_a_site(graph, transcript):
+async def test_files_search_is_one_search_query_kept_to_team_sites(graph, transcript):
     respx.get(f"{GRAPH}/groups").mock(return_value=page({"id": "g1", "displayName": "Ops"},
                                                         {"id": "g2", "displayName": "New"}))
     respx.get(f"{GRAPH}/groups/g1/drive").mock(return_value=httpx.Response(200, json={"id": "d1"}))
-    respx.get(f"{GRAPH}/groups/g2/drive").mock(return_value=httpx.Response(404, json={"error": {}}))
-    respx.get(url__startswith=f"{GRAPH}/drives/d1/root/search").mock(return_value=page(
-        {"id": "i1", "name": "rates.xlsx", "lastModifiedDateTime": "2026-10-01T00:00:00Z"}))
+    respx.get(f"{GRAPH}/groups/g2/drive").mock(return_value=httpx.Response(404, json={"error": {}}))  # no site
+    rates = {"id": "i1", "name": "rates.xlsx", "lastModifiedDateTime": "2026-10-01T00:00:00Z", "file": {}}
+    query = respx.post(f"{GRAPH}/search/query").mock(return_value=search_hits(
+        ("d1", rates),
+        ("d1", {"id": "i2", "name": "rates", "lastModifiedDateTime": "t", "folder": {}}),          # a folder
+        ("onedrive", {"id": "i3", "name": "rates.xlsx", "lastModifiedDateTime": "t", "file": {}})))  # not a site
+
     [hit] = await run_read(graph, transcript, "files.search", query="rates")
+
     assert hit == {"site": "Ops", "drive_id": "d1", "item_id": "i1", "name": "rates.xlsx",
                    "lastModified": "2026-10-01T00:00:00Z"}
+    [request] = json.loads(query.calls.last.request.content)["requests"]
+    assert request | {} == {"entityTypes": ["driveItem"], "query": {"queryString": "rates"}, "region": "NAM",
+                            "size": 25}
 
 
 @respx.mock
 async def test_files_search_falls_back_to_the_top_folder_while_the_index_lags(graph, transcript):
     respx.get(f"{GRAPH}/groups").mock(return_value=page({"id": "g1", "displayName": "Ops"}))
     respx.get(f"{GRAPH}/groups/g1/drive").mock(return_value=httpx.Response(200, json={"id": "d1"}))
-    respx.get(url__startswith=f"{GRAPH}/drives/d1/root/search").mock(return_value=page())
+    respx.post(f"{GRAPH}/search/query").mock(return_value=search_hits())
     respx.get(f"{GRAPH}/drives/d1/root/children").mock(return_value=page(
         {"id": "i1", "name": "Q3 Parking Rates.xlsx", "lastModifiedDateTime": "t", "file": {}},
         {"id": "i2", "name": "Q3 Parking Rates", "lastModifiedDateTime": "t", "folder": {}},  # a folder
