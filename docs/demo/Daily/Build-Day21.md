@@ -590,6 +590,93 @@ From `tech library reset` and `tenant/reset.py --files all`:
 
 Timings, approvals and cost for each run go here.
 
+## Part 7 (done): live, 2026-10-14
+
+**The loop worked in the UI** after two fixes to `files.search`, found on the first ticket (below).
+
+| Step | Run | Result |
+| --- | --- | --- |
+| 1. Sophie, no playbook | 27 | Banner. Plan: restore 2.0, `approve/no_playbook.approve`, with a confirm question (2.0 or 1.0). One approval (Taylor). Verified: 2.0 restored as 4.0, 12,765 bytes. `version_restored` ✔ and `message_sent` ✔. Investigated in about 15 s, with `files.search` at 1.5 s. |
+| 2. Save → edit → A3 | 27 | Drafted in one Opus call (3,410 in / 1,149 out), passing every check first time, and opened on the review screen with run 27 as its source. Edited (below), still passing, then **approved at A3** as `file.restore_version` v1 (`agent_run`, run #27). |
+| 3. Grace, hands-free | 28 | **DONE in 32 s with no approval.** `auto/autonomy.a3.write.reversible`, Staffing Plan 2.0 restored as 4.0, both probes ✔. Header: "Learned playbook file.restore_version v1 · from run #27 · no approvals". |
+| 4. Demote → Grace again | 29 | Demote to A2 from the library, then files re-staged (`tenant/reset.py`). Grace's ticket waited on **`approve/autonomy.unproven`**. Approved by Taylor → DONE, both probes ✔. |
+| 5. L4: console run | 30 | Jordan's ticket was planned (`group.addMember`, needs approval), since search no longer times out. Taylor rejected it → ESCALATED (rejected). Do it myself: `group.addMember` Northwind Operations ← Jordan, both picked from the reads, "✔ t1 verified · by aditya · technician.self". Close with a note → DONE. **The reply names the group** (decision 5). Saved: intent prefilled `group.add_member`, renamed `site.grant_access`. Draft (3,604 / 1,420) passed → **A3** (`technician_run`, run #30). |
+| 6. Written playbook | — | `/playbooks/new`: `user.update_title`, plain-English steps, `user.update`. Drafted and passed; **A3 greyed out** ("needs a successful approved run on this playbook first"). Approved at A2, ceiling A2. |
+| 7. Admin center | — | **Skipped.** Your answer didn't cover it, and it needs you in Entra. Day 20 proved it live, and Part 4 checked its UI on run 24. |
+| 8. Revert | — | `tenant/reset.py` removed Jordan from Northwind Operations and re-staged the files. `tech library reset` deleted the three learned or written versions. Read back: Jordan is in Field Operations, Northwind Parking and Parking Supervisors, with title "Lead Lot Attendant". |
+
+Build-W4's manual checks 1-5 pass in the UI. Check 6 (the admin-center draft) was skipped, as above.
+
+**The "edit one line" took three lines.** The draft's `never` line ("Restore a version when the history
+doesn't make clear which save was the unwanted one, unless someone has confirmed the target version") would
+make every staged restore a question, because every version is by "SharePoint App", seconds apart.
+Gotchas 15 and 16 said the same thing ("Don't guess. Get confirmation…" and "If the times and sizes don't
+settle it, ask"), so editing only the `never` line would have left the playbook contradicting itself. The
+three edits:
+
+- **`never`:** "Restore anything older than the version just below the newest when the history doesn't make
+  clear which save was the unwanted one, unless someone has confirmed the target version."
+- **Gotcha 15:** "If the requester asks for the version from before their save, restore the one just below
+  the newest; confirm anything further back first."
+- **Gotcha 16:** "Take the one just below the newest, unless the requester points further back or the sizes
+  say otherwise; then ask."
+
+On stage, the edit is either rehearsed as these three lines or narrated as "loosen the confirm rule". Day
+22's rehearsal decides.
+
+**Fixes made live (committed separately):**
+
+- **`c99c74b` `files.search` is now one Microsoft Search query** (`POST /search/query`, driveItem, region
+  NAM), not a `root/search` per team site. Graph throttles those (429, `Retry-After: 30`, waited out quietly
+  by `GraphClient`), so one `files.search` took 37 s and Sophie's no-playbook runs 25 and 26 escalated on
+  the 60 s bound. It now takes 1-3 s.
+  - Hits are kept to the team-site libraries and to files.
+  - The top-folder fallback stays.
+  - FakeTenant answers `/search/query`, and `writes()` treats it as a read.
+  - You chose this over listing top folders, waiting out the throttle, or raising the bound.
+- **`f11ffb9` stale hits dropped.** Straight after a reset re-uploads the files, the search index still
+  returns the *deleted* item ID (`files.versions` → 404) and doesn't know the new one yet. Each hit is now
+  confirmed with one item read (not throttled); a 404 is dropped, and the top-folder fallback finds the
+  fresh upload.
+- **`8b94d1e` reverts `2a494e3`.** That commit capped drive searches at two at a time, on the wrong
+  diagnosis that concurrency was the cause (see the notes below). You chose to revert it.
+
+**Follow-ups this found (not done):**
+
+- **Grace isn't in the inbox's `SENDERS`,** so her tickets went through `POST /tickets` (the inbox's own
+  call) and were watched in the UI. Add her (and any other demo requester) for Day 22's script.
+- **Console steps name groups, not people:** "The user has been added to the Northwind Operations team
+  group". Only group actions have a name param. A `userName` filled the same way would finish decision 5.
+- **The drafter over-collects `must_investigate`:** six reads on run 30's draft, including `users.list()`,
+  as on Day 20. This is still open.
+- **Triage puts a file restore under "Out of scope, won't act on"** (runs 25-27, as on Day 18) while the
+  investigator restores it anyway. That's confusing on screen.
+- **The inbox's Start, the review screen's A3 and Approve, and the panel buttons sometimes ignored a click
+  made by element reference right after a `form_input`;** clicking by position worked. This is about the
+  test browser rather than the app, but it's worth a look if anyone reports dead buttons.
+- **`tenant/reset.py` still prints "Not yet reset: app-side playbooks and runs (no app yet)".** Day 22's
+  reset should call `tech library reset`.
+
+### Notes from the pause at step 1
+
+- **Reset:**
+  - `tech library reset --yes` deleted `file.restore_version` v1, `site.grant_access` v1 and
+    `user.update_title` v1, and autonomy went back to client facts;
+  - `tenant/reset.py` re-uploaded the three files at 19:27 UTC, searchable at once with fresh item IDs.
+- **Sophie, worded "…saved over Q3 Parking Rates.xlsx earlier today…":**
+  - **Run 25** escalated on the **60 s no-playbook timeout**. `files.search` took 37 s, and the
+    investigation had already found the file and its three versions.
+  - **Run 26** escalated the same way: `files.search` took 38 s.
+  - On both, the workspace showed the no-playbook banner, and triage put the restore under "out of
+    scope" (as on Day 18). Nothing was written to the tenant.
+- **The cause: Graph throttles the drive searches.** `GET /drives/{id}/root/search` answers 429 with
+  `Retry-After: 30`, and `GraphClient` waits and retries quietly. One `files.search` is six drive searches
+  (one per team site), so a throttled call costs about 36 s whatever the concurrency.
+- **A wrong first diagnosis:** that concurrent searches stall. Commit `2a494e3` (at most two at once) was
+  based on timings that just happened to fall in and out of the throttle window. My own diagnostic
+  scripts sent dozens of searches in a few minutes, which made it worse. The cap does no harm, but it
+  isn't the fix, and its commit message is wrong.
+
 ## Verification
 
 - `uv run pytest` and `uv run ruff check backend` are green, including L1-L4 with zero bypasses.
