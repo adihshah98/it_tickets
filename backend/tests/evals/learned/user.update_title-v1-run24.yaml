@@ -1,0 +1,69 @@
+intent: user.update_title
+version: 1
+source: audit_log
+run_id: 24
+ticket: Jordan Lee has been promoted, please change his job title to Lot Supervisor.
+from: tgarcia@NorthwindParking.onmicrosoft.com
+triage:
+  intents:
+  - unknown
+  entities:
+    new_user: null
+    peer_user_hint: null
+    subject_user_hint: Jordan Lee
+    apps: []
+  requester:
+    name: <UNKNOWN>
+    email: tgarcia@northwindparking.onmicrosoft.com
+  out_of_scope_asks: []
+  missing_info:
+  - What is the correct intent for updating a user's job title? This does not match
+    known intents (user.onboard, user.offboard, mfa.reset, file.restore_version, site.grant_access)
+reads:
+- - users.search
+  - name: Jordan
+- - users.search
+  - name: Lee
+- - users.get
+  - user_id: 37a5cc66-347e-4665-a51c-b2a9e6070222
+plan:
+  intent: user.update_title
+  summary: Change Jordan Lee's (jlee@NorthwindParking.onmicrosoft.com) job title from
+    "Lead Lot Attendant" to "Lot Supervisor" after his promotion. The requester (tgarcia)
+    is an approved approver. The directory has only one user named Jordan Lee.
+  assumptions:
+  - Only the job title changes. Department (Operations) and manager (Kevin Brooks)
+    stay as they are because the ticket doesn't mention them.
+  steps:
+  - id: update_title
+    depends_on: []
+    rationale: The requester asked for this title change after a promotion. There
+      is one matching user, whose current jobTitle is 'Lead Lot Attendant'. Undo it
+      by setting the title back.
+    expected:
+      jobTitle: Lot Supervisor
+      department: Operations
+      accountEnabled: true
+    risk_class: write.reversible
+    action: user.update
+    params:
+      userId: 37a5cc66-347e-4665-a51c-b2a9e6070222
+      usageLocation: null
+      accountEnabled: null
+      department: null
+      jobTitle: Lot Supervisor
+      displayName: null
+  needs_technician: []
+  confirm_on_approval: []
+  questions_for_requester: []
+  out_of_scope_requests: []
+  escalate: false
+  escalation_reason: null
+  diagnosis: null
+  evidence: []
+  checked: []
+  suggested_next_step: null
+  missing_action: null
+gate:
+  update_title: approve/no_playbook.approve
+state: ESCALATED

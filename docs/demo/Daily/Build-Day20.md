@@ -20,7 +20,7 @@ Each part ends with green tests and a commit, then a stop for review.
 | 1 | Technician steps: transcript from events, confirming read, gate's technician path, executor `actor`, bypass check | New path; agent runs unchanged: **done** |
 | 2 | Technician close-out, wider `can_save_playbook`, learning case **L1** | Escalated runs can close via a technician: **done** |
 | 3 | Audit-log learning: the read, `audit_map`, `from_audit_log`, the polling route, **L2** | New path: **done** |
-| 4 | Live: one console step on the tenant, and an audit draft from a real admin-center change | None |
+| 4 | Live: one console step on the tenant, and an audit draft from a real admin-center change | Two probe fixes found live: **done** |
 
 **Needs your approval:**
 
@@ -493,7 +493,83 @@ The results go into this doc and settle decision 9's names and decision 11's tim
 
 **Result:** `uv run pytest`: 497 passed. `ruff` is clean. No live run.
 
-## Part 4: live (needs approval: tenant writes and model spend)
+## Part 4 (done): live, 2026-10-14
+
+**Console half (runs 21-23):**
+
+- **Run 21**, "Please give Jordan Lee access to the Northwind Operations site.":
+  - Intake said `unknown`, so no playbook applied.
+  - **Escalated on the 60 s no-playbook timeout**, after the investigator had already found the answer
+    ("add Jordan to the Northwind Operations M365 group"). `files.search` alone took about 39 s across the
+    six team sites. Worth a look before the demo: it's the slowest read, and Day 18's Sophie run also
+    leaned on it.
+  - Then:
+    - `tech step 21 group.addMember …`: `approve/technician.self`, verified in 3 s;
+    - `tech close 21 --note …`: `message_sent` ✔, the note was in the PSA note, a 4-minute time entry,
+      DONE.
+  - **The reply quality is poor:** "Hi tgarcia … A user was added to the requested group". It names no
+    one, because the console step's params are bare GUIDs (no `groupName`), and it repeats the
+    onboarding prompt's "no sign-in link" boilerplate.
+- **The draft** passed every check on the first try, but needed review. A person approving would catch
+  all three of these:
+  1. It was saved as `intent: unknown`: the run had no plan, and intake said `unknown`. Renamed to
+     `site.grant_access`.
+  2. `must_investigate` had 7 reads, including `files.search` (39 s), `users.list`, `users.get` and
+     `users.licenseDetails`. It was trimmed to 3 (`users.search`, and `users.memberOf` for the subject and
+     for the manager or peers).
+  3. **`user_in_groups: {groups: "$plan.mirrored_groups"}`** came from the onboarding example. The probe
+     only checked a newly created user, so it would have failed every run, and at A3 auto-demoted on the
+     first one.
+  - **Fixed (`89ecf5d`):** with no `user.create`, it checks each group add's own user.
+  - Approved at A3 (`technician_run`), with the edits re-checked.
+- **Run 22**, "Can Luis Ortega get into the Northwind Operations site too?":
+  - Intake → `site.grant_access`, and the run used v1 (not no-playbook).
+  - **Escalated by the playbook's own gotcha:** neither Luis's manager (Dennis, Facilities) nor a same-role
+    peer is in the group, and "Field Operations" is a look-alike group. That's correct on this data: the
+    caution came from the drafted playbook, and it held.
+- **Run 23, Omar Haddad (whose manager Kevin is in the group): hands-free.**
+  - Intake → `site.grant_access`.
+  - `auto/autonomy.a3.write.reversible`, verified in 6.5 s.
+  - **`user_in_groups: in all 1` ✔ (the fix, live)**, and `message_sent` ✔.
+  - No approval, 1 minute, DONE.
+
+**Audit half (run 24):**
+
+- "Jordan Lee has been promoted, please change his job title to Lot Supervisor.": no playbook →
+  `user.update` `approve/no_playbook.approve` → rejected by tgarcia → ESCALATED.
+- You changed the title in the admin center at 16:10:52 UTC. `tech audit-draft 24` found it at 16:12:23
+  (`waiting` → `found`, about 90 s). It learned exactly `user.update {userId: Jordan, jobTitle: "Lot
+  Supervisor"}`, with no noise kept. The drafter named the intent `user.update_title`.
+- **Same trap:** the draft's DoD used `user_property`, which also only checked a created user.
+- **Fixed (`f482044`):**
+  - with no `user.create`, it checks each `user.update` step's own fields;
+  - `user_exists` and `user_has_sku`, which really are new-user-only, are now rejected by `playbook_check`
+    unless the playbook allows `user.create`, so the drafter gets a retry with the reason;
+  - `tap_active` already falls back to the subject, so it isn't affected.
+- Approved unchanged at A2 (A3 refused: "needs a successful approved run"). It's in `unproven()`, so its
+  next run needs one approval.
+
+**Learned records:** `site.grant_access-v1-run21.yaml` and `user.update_title-v1-run24.yaml`, in
+`backend/tests/evals/learned/`.
+
+**Reverted afterwards:** Jordan and Omar removed from Northwind Operations, and Jordan's title back to
+"Lead Lot Attendant". Read back clean 10 s later. The local `data/tech.db` still holds the two learned
+playbooks and runs 21-24; Day 22's reset clears them.
+
+**Follow-ups this found (not done):**
+
+- **The no-playbook 60 s bound vs `files.search`'s 39 s fan-out.** Options: drop `files.search` for
+  non-file tickets via the guideline, run its six site searches concurrently, or raise the bound.
+- **Console-step names:** fill `groupName` (and a user's name) from the transcript when a technician step
+  is built, so the approval card, the close-out reply and the PSA note name people and groups, not GUIDs.
+- **The close-out prompt is onboarding-shaped** ("no sign-in link to send"). It needs per-action wording,
+  like `REPLY_NOTES`.
+- **The drafter over-collects `must_investigate`.** Its prompt should say the list is *mandatory on every
+  run*, so it lists only reads every run needs.
+- **The drafter copies onboarding's DoD args.** Now partly guarded (new-user probes). A probe list that
+  says which probes suit which actions would help it choose.
+
+## Part 4: the plan (as written before the live run)
 
 1. Re-stage a no-playbook ticket that escalates (L1's wording) via the CLI.
 2. `tech step` group.addMember Jordan → Northwind Operations. Then `tech close`, then
