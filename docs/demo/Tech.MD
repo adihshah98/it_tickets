@@ -827,7 +827,13 @@ Week 4
 - Learning new playbooks
 - Resolving ticket with no prior info
 
+Demoable
+
 Week 5
+
+- Unified format for actions + add new items to catalog from user actions
+
+Week 6
 
 - Expansions
   - PSA integration?

@@ -1,0 +1,102 @@
+intent: site.grant_access
+version: 1
+source: technician_run
+run_id: 30
+ticket: Please give Jordan Lee access to the Northwind Operations site.
+from: tgarcia@NorthwindParking.onmicrosoft.com
+triage:
+  intents:
+  - unknown
+  entities:
+    new_user: null
+    peer_user_hint: null
+    subject_user_hint: Jordan Lee
+    apps:
+    - Northwind Operations site
+  requester:
+    name: tgarcia
+    email: tgarcia@northwindparking.onmicrosoft.com
+  out_of_scope_asks: []
+  missing_info:
+  - Jordan Lee's email address or user ID
+  - Type of access needed (read, edit, admin, etc.)
+  - Context for why access is needed - is this a new user onboarding or an existing
+    user needing access grant?
+reads:
+- - users.search
+  - name: Lee
+- - users.search
+  - name: Jordan
+- - files.search
+  - query: Northwind Operations
+- - users.memberOf
+  - user_id: 37a5cc66-347e-4665-a51c-b2a9e6070222
+- - users.list
+  - {}
+- - users.get
+  - user_id: 37a5cc66-347e-4665-a51c-b2a9e6070222
+- - users.memberOf
+  - user_id: c9bebe97-6c1b-4bfb-933c-fe84a8ae465e
+- - users.memberOf
+  - user_id: 12c50eb5-9ea7-4136-800b-e406f3992320
+- - users.memberOf
+  - user_id: 302a08b1-1ea8-45ac-8e56-95c5752af435
+plan:
+  intent: group.add_member
+  summary: Add Jordan Lee (jlee@) to the Microsoft 365 group "Northwind Operations"
+    (619403f7-e261-4048-892e-4f3ee8125caa). That group owns the Northwind Operations
+    team site, where files like Lot Permits Tracker.xlsx, Staffing Plan.xlsx and Q3
+    Parking Rates.xlsx live. Jordan is in Field Operations but not in Northwind Operations.
+    His manager, Kevin Brooks (Operations Supervisor), is in both. The request comes
+    from tgarcia, who is an approved requester.
+  assumptions:
+  - '''Northwind Operations site'' means the team site of the M365 group ''Northwind
+    Operations''. files_search shows a site with exactly that name, and there is no
+    other site with a matching name.'
+  - This is a request for site access only. Jordan already has an account, so this
+    isn't an onboarding. He has not signed in yet; his account was created 2026-10-09.
+  - The ticket didn't ask for VPN or hosted desktop (RDS) access, so it isn't included,
+    even though Kevin has both.
+  steps:
+  - id: add_jlee_nw_ops
+    depends_on: []
+    rationale: The Northwind Operations site belongs to this M365 group. Adding Jordan
+      as a member gives him access to the site and its document library. The group
+      isn't in client_facts.group_handling, and it's an M365 group, so Graph can change
+      it.
+    expected:
+      memberOf_includes: 619403f7-e261-4048-892e-4f3ee8125caa
+      groupDisplayName: Northwind Operations
+    risk_class: write.reversible
+    action: group.addMember
+    params:
+      groupId: 619403f7-e261-4048-892e-4f3ee8125caa
+      userId: 37a5cc66-347e-4665-a51c-b2a9e6070222
+      groupName: Northwind Operations
+  needs_technician: []
+  confirm_on_approval:
+  - key: other
+    question: Is member access (members of an M365 group can edit the team site) right
+      for Jordan, or should he only be able to read it?
+    proposed: Add Jordan as a member of Northwind Operations (edit access to the site)
+    evidence: The ticket says only 'access'. Graph can only add M365 group members,
+      and members can edit by default. Kevin Brooks, Jordan's manager, is also a member.
+  questions_for_requester: []
+  out_of_scope_requests: []
+  escalate: false
+  escalation_reason: null
+  diagnosis: null
+  evidence: []
+  checked:
+  - 'Jordan Lee is the only match in the directory: 37a5cc66-347e-4665-a51c-b2a9e6070222,
+    enabled, department Operations, manager Kevin Brooks.'
+  - 'Jordan''s current groups: Northwind Parking, Parking Supervisors, Field Operations.
+    He is not in Northwind Operations.'
+  - Kevin Brooks's groups include the M365 group Northwind Operations (619403f7-e261-4048-892e-4f3ee8125caa).
+    Omar Haddad and Raj Patel (Operations staff) are not in it.
+  suggested_next_step: null
+  missing_action: null
+gate:
+  add_jlee_nw_ops: approve/no_playbook.approve
+  t1: approve/technician.self
+state: DONE

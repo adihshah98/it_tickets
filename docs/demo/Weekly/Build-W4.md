@@ -8,10 +8,10 @@ Week 4 builds the fourth demo scenario, the one that answers "what happens with 
 
 1. **No-playbook runs** ([Tech.MD §4.9](../Tech.MD)): a ticket type with no playbook is still investigated, then either planned using only the no-playbook allow-list (every write needs approval) or escalated with a diagnosis.
 2. **Learning a playbook from four sources.** Each becomes a draft that goes through the same code checks and human approval:
-   - **an agent run** the technician approved (Tech.MD §4.10, the demo beat);
-   - **a technician's own run in our console**: the technician picks catalogue actions in the workspace, and our executor runs and verifies each one, so the steps are recorded exactly like an agent's;
-   - **a playbook the technician writes**, in plain English or YAML;
-   - **audit logs** of a fix the technician made in the Entra admin center, read from `directoryAudits` (Tech.MD §4.10 called this product-only; we build a scoped version).
+  - **an agent run** the technician approved (Tech.MD §4.10, the demo beat);
+  - **a technician's own run in our console**: the technician picks catalogue actions in the workspace, and our executor runs and verifies each one, so the steps are recorded exactly like an agent's;
+  - **a playbook the technician writes**, in plain English or YAML;
+  - **audit logs** of a fix the technician made in the Entra admin center, read from `directoryAudits` (Tech.MD §4.10 called this product-only; we build a scoped version).
 3. **One playbook store.** Shipped and learned playbooks are the same thing: versioned YAML rows in the store. The repo's YAML files only seed the shipped v1.
 
 **Already in place** (from earlier weeks):
@@ -28,7 +28,7 @@ Week 4 builds the fourth demo scenario, the one that answers "what happens with 
 
 1. **Eval harness** (moved from W3 Day 15): `cases.yaml` plus `eval_harness.py`, offline and live tiers, cases 1-22 passing and 23-28 `xfail` until their features land.
 2. **No-playbook path**: open intents, a generic investigator with tighter bounds, an `Escalation` outcome, linter rules 3-6 in no-playbook mode, and gate rule 3.
-3. **`file.restoreVersion`**: four-touch, with its DoD probe and FakeTenant routes.
+3. `file.restoreVersion`: four-touch, with its DoD probe and FakeTenant routes.
 4. **Playbook store** (one store for every playbook), the drafter, code checks, versioning, autonomy overrides, and demotion.
 5. **Learning from people**: technician console runs, written playbooks, and audit-log observation.
 6. **Web**: the no-playbook banner, the escalation diagnosis, the "Do it myself" panel, Save as playbook, the review screen side by side with its source, the library, a new-playbook editor, and the learned badge.
@@ -53,6 +53,8 @@ Week 4 builds the fourth demo scenario, the one that answers "what happens with 
 - The outside-contact ticket escalates with the missing action named.
 - 28/28 plus the learning cases pass offline, and the four scenarios pass live.
 - The full 10-minute demo has been rehearsed, with replay as a fallback.
+
+
 
 ## Decisions carried in
 
@@ -83,7 +85,7 @@ Week 4 builds the fourth demo scenario, the one that answers "what happens with 
     - rule 4 requires a non-empty `expected` on every step, plus a reply;
     - rules 5 and 6 are skipped.
   - **Gate:** rule 3 sits before autonomy. A step not on the allow-list is `block` (`no_playbook.not_allowed`); otherwise it is `approve` (`no_playbook.approve`). A3 can never auto it.
-  - **`NO_PLAYBOOK_ALLOWED`** goes in [safety/policy.py](../../../backend/tech/safety/policy.py), pinned by a test: `user.update` (non-security fields), `group.addMember`/`group.removeMember`, `mailbox.autoReply`, `file.restoreVersion`, `link.sendOneTime`.
+  - `NO_PLAYBOOK_ALLOWED` goes in [safety/policy.py](../../../backend/tech/safety/policy.py), pinned by a test: `user.update` (non-security fields), `group.addMember`/`group.removeMember`, `mailbox.autoReply`, `file.restoreVersion`, `link.sendOneTime`.
 - **Every learning source produces the same thing.** Each source is reduced to a `DraftSource`:
   - the triage;
   - **observed steps**, each with its action, params, verify result and actor;
@@ -120,7 +122,9 @@ Week 4 builds the fourth demo scenario, the one that answers "what happens with 
   - Unmapped activities are listed as "can't learn: not in the catalogue".
   - SharePoint/Exchange changes are in the unified audit log, not here; that is Week 5. So the audit-log demo case is a directory change, not the file restore.
   - **The first two hours of Day 20 are a spike** to measure real lag and filter support on the tenant before building the UI.
-- **An all-`auto` plan skips `AWAITING_APPROVAL`.** Check that the runner goes from `PLAN_CHECKED` to `EXECUTING` when no step is `approve` (no demo plan has exercised this path). Add it if it's missing, and pin it with a test.
+- **An all-**`auto` **plan skips** `AWAITING_APPROVAL`**.** Check that the runner goes from `PLAN_CHECKED` to `EXECUTING` when no step is `approve` (no demo plan has exercised this path). Add it if it's missing, and pin it with a test.
+
+
 
 ## Repo layout (deltas from Week 3)
 
@@ -163,6 +167,8 @@ web/
   app/playbooks/            library, /playbooks/new (written), /playbooks/[intent] (review/edit/approve)
 ```
 
+
+
 ## Day-by-day
 
 The through-line: Weeks 1-3 proved the machinery works when a playbook says what good looks like. Week 4 proves it **stays safe without one** (the gate tightens, it doesn't loosen). It also shows that **every playbook, whoever it came from, enters through one door**: a code-checked draft plus a human approval, with autonomy earned by evidence. Ordering: harness first, then the store and no-playbook rules (they move the bar for every case), then the features, with eval cases un-xfailed as each lands.
@@ -176,6 +182,8 @@ The through-line: Weeks 1-3 proved the machinery works when a playbook says what
 - Cases 1-22 must pass. 23-28 are `xfail(reason="Week 4 Day N")`.
 - **Seed gaps:** check whether #3 (disabled same-name user), #9 (never-signed-in), #14 and #16 need tenant state the seed lacks, and extend `tenant/seed.py` if so (W3 open item).
 - **Gate:** 22/22 offline in `uv run pytest`. The live tier is run once and the results are recorded.
+
+
 
 ### Day 17. One playbook store, open intents, the no-playbook path
 
@@ -198,6 +206,8 @@ The through-line: Weeks 1-3 proved the machinery works when a playbook says what
   - A3 can't auto a no-playbook step;
   - a step missing `expected` fails lint;
   - `unknown` → no-playbook mode.
+
+
 
 ### Day 18. `file.restoreVersion` + Sophie live
 
@@ -222,6 +232,8 @@ The through-line: Weeks 1-3 proved the machinery works when a playbook says what
   - Un-xfail **#23, #24**.
 - **Check first thing:** the SharePoint search-index lag on `files.search` after reset. If it's too slow, add a fallback that lists the team-site drive by name.
 
+
+
 ### Day 19. Drafter, code checks, approval, autonomy
 
 - `DraftSource`/`ObservedStep` models. `learning/sources.py`:
@@ -243,6 +255,8 @@ The through-line: Weeks 1-3 proved the machinery works when a playbook says what
   - A3 → the restore is `auto` and skips approval (un-xfail **#27**);
   - a DoD failure at A3 → demoted to A2;
   - the drafter input contains no ticket text, and the library is unchanged by "remember for next time" (un-xfail **#28**).
+
+
 
 ### Day 20. Learning from people: console runs and audit logs
 
@@ -271,6 +285,8 @@ The through-line: Weeks 1-3 proved the machinery works when a playbook says what
   - the zero-bypass check accepts technician actors and rejects agent `approve` steps without an approval;
   - learning cases **L1** (console run → draft → approve → next run uses it) and **L2** (audit-log draft at A2 max).
 
+
+
 ### Day 21. Web: the learning loop and Grace's hands-free run
 
 - **Workspace:**
@@ -279,19 +295,21 @@ The through-line: Weeks 1-3 proved the machinery works when a playbook says what
   - the **"Do it myself"** panel (action picker → param form with an observed-ID picker → run; each step shows verified like the agent's, tagged with the technician's name);
   - **"Save as playbook"** (agent or console run);
   - **"I fixed it in the admin center"** (audit draft, with a waiting state).
-- **`/playbooks/[intent]` review:**
+- `/playbooks/[intent]` **review:**
   - the editable YAML side by side with its source (the run's steps and verify results, the audit entries, or the written prose);
   - check results inline;
   - an autonomy picker that respects the ceiling;
   - Approve;
   - the version history.
-- **`/playbooks/new`:** intent name, plain-English steps, allowed actions (a catalogue checklist), then Draft and the same review screen. This is learning case **L3**.
-- **`/playbooks` library:** shipped and learned together, with source, version and autonomy, the "Learned from 1 technician-approved run" link, and one-click demote.
+- `/playbooks/new`**:** intent name, plain-English steps, allowed actions (a catalogue checklist), then Draft and the same review screen. This is learning case **L3**.
+- `/playbooks` **library:** shipped and learned together, with source, version and autonomy, the "Learned from 1 technician-approved run" link, and one-click demote.
 - Read `web/node_modules/next/dist/docs/` before the new routes (`web/AGENTS.md`). No new runtime deps.
 - **Live loop:**
   1. Sophie → Save as playbook → edit one line → A3 → Grace closes with **zero approvals**.
   2. Demote → Grace again → needs approval.
   3. Repeat once with a console run on a no-playbook ticket (case **L4**).
+
+
 
 ### Day 22. Audit trail, time-saved card, rehearse, docs
 
@@ -344,6 +362,8 @@ The eval harness, no-playbook path, file restore, the drafter, and agent-run and
 - In `web/`: `npm test`, `npx tsc --noEmit`, `npm run lint` and `npm run build` are clean.
 - The full 10-minute demo runs end to end, within time, 3 times in a row.
 
+
+
 ## Risks
 
 - **Seven days, not five.** The harness and two extra learning sources add about 2.5 days. Mitigation: the ordered cut line. Audit-log learning is the first feature cut, and the spike decides early.
@@ -356,9 +376,12 @@ The eval harness, no-playbook path, file restore, the drafter, and agent-run and
 - **An A3 hands-free restore picks the wrong version.** Mitigation: the ambiguity rule (#24), auto-demote on any failure, and the restore is non-destructive.
 - **SharePoint search-index lag after reset.** Mitigation: measure on Day 18, the drive-listing fallback, and staging files the evening before.
 
+
+
 ## Open items
 
 - Auto-demote to A2 (proposed) vs A1 (Tech.MD). Confirm before Day 19.
 - Who can approve a playbook: any technician, or a named role? Proposed for the demo: the presenter, recorded as `approved_by`. For the product: a per-MSP "playbook approver" list.
 - Does the file-restore intent need a requester approver list? Today Sophie and Grace pass because there's no list, the same as `mfa.reset`. Confirm that this is right for a data restore.
 - Whether to export approved versions as YAML for git review. Proposed: a "download YAML" link on the review screen; the store is the source of truth.
+

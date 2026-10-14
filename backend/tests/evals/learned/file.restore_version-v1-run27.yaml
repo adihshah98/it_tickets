@@ -1,0 +1,84 @@
+intent: file.restore_version
+version: 1
+source: agent_run
+run_id: 27
+ticket: Hi! I accidentally saved over Q3 Parking Rates.xlsx earlier today. Can you
+  get back the version from before I saved over it? Thanks, Sophie
+from: sbaker@NorthwindParking.onmicrosoft.com
+triage:
+  intents:
+  - unknown
+  entities:
+    new_user: null
+    peer_user_hint: null
+    subject_user_hint: null
+    apps: []
+  requester:
+    name: Sophie Baker
+    email: sbaker@northwindparking.onmicrosoft.com
+  out_of_scope_asks:
+  - recover previous version of Q3 Parking Rates.xlsx file
+  missing_info: []
+reads:
+- - users.search
+  - name: Sophie
+- - files.search
+  - query: Q3 Parking Rates
+- - files.versions
+  - drive_id: b!H-i7YY5pVEqXQkPXRsnUJLuxRunmPO1KtzAS0DsA2RAXToSyhvzRTppnO_EhlcHb
+    item_id: 01A7DRABOEXIS22IHOHNE2RNSMAMJCS6YT
+- - users.memberOf
+  - user_id: eabb4284-1ebd-4688-9334-fe6a2bf58881
+plan:
+  intent: file.restore_version
+  summary: I plan to restore Q3 Parking Rates.xlsx on the Northwind Operations site
+    to version 2.0. That's the version right before the save that's there now (3.0).
+    Restoring adds a new version on top, so the overwritten copy (3.0) stays in the
+    history and can be brought back. Sophie Baker sent the request and is an approved
+    requester. She is also a member of Northwind Operations, so she already has access
+    to this file.
+  assumptions:
+  - Sophie's accidental save is the newest version (3.0), so the copy she wants is
+    the one just before it (2.0).
+  - '''Q3 Parking Rates.xlsx'' in the Northwind Operations library is the file she
+    means. The search found only this one.'
+  steps:
+  - id: restore_q3_rates
+    depends_on: []
+    rationale: 'Sophie says she saved over the file today. The version history has
+      3.0 (the current copy, 19:27:05Z, 12604 bytes) on top of 2.0 (19:27:03Z, 12765
+      bytes). 2.0 is the version right before the latest save. Restoring doesn''t
+      delete anything: it adds a new version, and 3.0 stays in the history.'
+    expected:
+      newest_version_size: 12765
+      restored_from_version: '2.0'
+      version_count: 4
+    risk_class: write.reversible
+    action: file.restoreVersion
+    params:
+      driveId: b!H-i7YY5pVEqXQkPXRsnUJLuxRunmPO1KtzAS0DsA2RAXToSyhvzRTppnO_EhlcHb
+      itemId: 01A7DRABOEXIS22IHOHNE2RNSMAMJCS6YT
+      versionId: '2.0'
+      fileName: Q3 Parking Rates.xlsx
+  needs_technician: []
+  confirm_on_approval:
+  - key: other
+    question: Is version 2.0 the copy Sophie wants back, or should it be 1.0?
+    proposed: Restore version 2.0 (2026-10-14 19:27:03Z, 12765 bytes)
+    evidence: There are three versions, all saved today within 5 seconds of each other
+      (1.0 at 19:27:00Z, 2.0 at 19:27:03Z, 3.0 at 19:27:05Z). Every save shows 'SharePoint
+      App' as the author instead of Sophie, so the history doesn't show which save
+      was hers. If her save made 2.0 rather than 3.0, then 1.0 is the right version.
+      Please check with Sophie before approving.
+  questions_for_requester: []
+  out_of_scope_requests: []
+  escalate: false
+  escalation_reason: null
+  diagnosis: null
+  evidence: []
+  checked: []
+  suggested_next_step: null
+  missing_action: null
+gate:
+  restore_q3_rates: approve/no_playbook.approve
+state: DONE
